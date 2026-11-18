@@ -215,18 +215,20 @@ final class GuildHUD: NSView {
     override var isFlipped: Bool { true }
     private let plaque = CrestPlate(frame: .zero)
     private let chart: GuildMap
-    private let back: StoneButton, names: StoneButton, commons: StoneButton, inventory: StoneButton
+    private let back: StoneButton, names: StoneButton, commons: StoneButton, inventory: StoneButton, music: StoneButton
     private var helpButton: StoneButton!
     private let hints = NSTextField(labelWithString: "Click or arrows to walk   ·   Click agent to talk   ·   W/S tilt   ·   A/D rotate   ·   Scroll zoom   ·   G dance")
     private var serviceKey: String?, statusCode: String?, activityCode: String?, lastTitle: String?
     private var lastCount = -1, lastWorking = -1
     init(in parent: NSView, onBack: @escaping () -> Void, onNames: @escaping () -> Void,
-         onCommons: @escaping () -> Void, onInventory: @escaping () -> Void, onWalk: @escaping (Double, Double) -> Void) {
+         onCommons: @escaping () -> Void, onInventory: @escaping () -> Void,
+         onMusic: @escaping () -> Void, onWalk: @escaping (Double, Double) -> Void) {
         chart = GuildMap(onWalk: onWalk)
-        back = StoneButton("‹  Guild", tip: "Return to the guild and its music", action: onBack)
+        back = StoneButton("‹  Guild", tip: "Return to the guild ledger", action: onBack)
         names = StoneButton("Names", tip: "Show or hide companion names (N)", action: onNames)
         commons = StoneButton("Commons", tip: "Walk to the commons and reset the camera", action: onCommons)
         inventory = StoneButton("Inventory", tip: "Open equipment inventory (I)", action: onInventory)
+        music = StoneButton("Music", tip: "Open the soundtrack player (M)", action: onMusic)
         super.init(frame: parent.bounds)
         autoresizingMask = [.width, .height]
         helpButton = StoneButton("?", tip: "Movement controls") { [weak self] in
@@ -236,7 +238,7 @@ final class GuildHUD: NSView {
         }
         hints.isHidden = true; hints.drawsBackground = true; hints.backgroundColor = Ink.stone
         hints.textColor = Ink.ivory; hints.font = .systemFont(ofSize: 12, weight: .medium); hints.alignment = .center
-        [plaque, chart, back, names, commons, inventory, helpButton!, hints].forEach { addSubview($0) }
+        [plaque, chart, back, names, commons, inventory, music, helpButton!, hints].forEach { addSubview($0) }
         parent.addSubview(self)
     }
     required init?(coder: NSCoder) { nil }
@@ -245,7 +247,7 @@ final class GuildHUD: NSView {
         let width = min(325, max(210,bounds.width-170))
         plaque.frame = CGRect(x: 12, y: 12, width: width, height: 57)
         var x: CGFloat = 12
-        for (button,w) in [(back,68.0),(names,62.0),(commons,80.0),(inventory,74.0),(helpButton!,27.0)] {
+        for (button,w) in [(back,68.0),(names,62.0),(commons,80.0),(inventory,74.0),(music,56.0),(helpButton!,27.0)] {
             button.frame = CGRect(x: x, y: 72, width: w, height: 27)
             x += w + 3
         }
@@ -255,7 +257,7 @@ final class GuildHUD: NSView {
     override func hitTest(_ p: NSPoint) -> NSView? {
         guard let parent = superview else { return nil }
         let local = convert(p, from: parent)
-        for button in [back, names, commons, inventory, helpButton!] where button.frame.contains(local) { return button }
+        for button in [back, names, commons, inventory, music, helpButton!] where button.frame.contains(local) { return button }
         return chart.containsGround(chart.convert(local,from:self)) ? chart : nil
     }
     func update(frame: GuildFrame, target: Actor?, yaw: Float, names shown: Bool) {

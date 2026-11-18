@@ -158,3 +158,18 @@ class CameraControlsTests(unittest.TestCase):
         self.controls.leave=None
         self.controls.action({'kind':'inventory'})
         self.assertEqual(self.controls.leave,'inventory')
+
+    def test_music_key_button_and_forwarded_action_leave_world_controls_live(self):
+        self.feed(b'\x1b[109;1:1u')
+        self.assertEqual(self.controls.command,{'music':True})
+        self.controls.command.clear()
+        self.feed(b'\x1b[109;1:2u\x1b[109;1:3u')
+        self.assertEqual(self.controls.command,{})
+        self.feed(b'\x1b[<0;29;40M\x1b[<0;29;40m')
+        self.assertEqual(self.controls.command,{'music':True})
+        self.controls.command.clear()
+        self.controls.action({'kind':'music'})
+        self.feed(b'\x1b[A')
+        self.assertEqual(self.controls.command,{'music':True})
+        self.assertEqual(self.controls.frame_keys(),['up'])
+        self.assertIsNone(self.controls.leave)

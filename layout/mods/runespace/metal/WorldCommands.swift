@@ -28,6 +28,8 @@ extension WorldWindow {
             engine.call("guildDance",[])
         case "inventory":
             end(kind:"inventory")
+        case "music":
+            openMusic()
         case "report":
             guard let frame else { return }
             let report: [String: Any] = [

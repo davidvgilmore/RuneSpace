@@ -28,9 +28,8 @@ METAL = Path(__file__).resolve().parents[1] / 'metal'
 DATA = HOME / 'data'
 EVENT = DATA / 'runespace-metal-event.json'
 RATE = 60
-DANCE_BUTTON = '[G Dance]'
-INVENTORY_BUTTON = '[I Inventory]'
-FOOTER_BUTTONS = DANCE_BUTTON+'  '+INVENTORY_BUTTON
+FOOTER_ACTIONS = (('[G Dance]', 'dance'), ('[I Inventory]', 'inventory'), ('[M Music]', 'music'))
+FOOTER_BUTTONS = '  '.join(label for label, _ in FOOTER_ACTIONS)
 IMAGE_IDS = (2718, 2719, 2720)
 MOUSE = re.compile(rb'\x1b\[<(\d+);(\d+);(\d+)([mM])')
 KEY = re.compile(rb'\x1b\[(\d+)(?:;(\d+)(?::(\d+))?)?u')
@@ -234,7 +233,7 @@ class Controls:
             if char == 'n': self.names = not self.names
             if char == 'h': self.command['home'] = True
             if char == '\x1b': self.command['cancel'] = True
-            if char == 'm': self.leave = 'music'
+            if char == 'm' and phase != 2: self.command['music'] = True
             if char == 'i' and phase != 2: self.leave = 'inventory'
 
     def read_input(self, w, h, cols, rows, hud_scale):
@@ -280,10 +279,12 @@ class Controls:
                     # Store a fraction of the presented image. A resolution step
                     # must not move the hover target while the mouse is still.
                     self.pointer=(-1.,-1.) if self.map.contains(point) else (point[0]/w,point[1]/h)
-                elif code&3==0 and y==rows and 1<=x<=len(DANCE_BUTTON):
-                    self.command['dance']=True
-                elif code&3==0 and y==rows and len(FOOTER_BUTTONS)-len(INVENTORY_BUTTON)<x<=len(FOOTER_BUTTONS):
-                    self.leave='inventory'
+                elif code&3==0 and y==rows:
+                    for label,kind in FOOTER_ACTIONS:
+                        start=FOOTER_BUTTONS.index(label)+1
+                        if start<=x<start+len(label):
+                            self.action({'kind':kind})
+                            break
                 elif code&3==0 and 1<y<rows:
                     if self.map.contains(point):
                         self.command['walk']=self.map.destination(point)
@@ -323,9 +324,9 @@ class Controls:
         if kind=='walk':self.command['walk']=[cmd['x'],cmd['z']]
         if kind=='talk':self.command['talk']=cmd['key']
         if kind in ('orbit','tilt','zoom'):self.command[kind]=self.command.get(kind,0)+cmd['delta']
-        if kind in ('home','dance','cancel','nearest'):self.command[kind]=True
+        if kind in ('home','dance','cancel','nearest','music'):self.command[kind]=True
         if kind=='names':self.names=not self.names
-        if kind in ('music','inventory'):self.leave=kind
+        if kind=='inventory':self.leave=kind
         if kind=='report':self.command['report']=True
 
 
@@ -492,6 +493,7 @@ def render_loop(binary, directory):
             held=focused_keys.sample(time.time()*1000,controls.action)
             request=controls.command;controls.command={}
             report=request.pop('report',False)
+            music=request.pop('music',False)
             if controls.pointer:request['pointer']=[controls.pointer[0]*width,controls.pointer[1]*height]
             keys=list(held.union(controls.frame_keys()))
             if held:controls.interacted=True
@@ -508,6 +510,8 @@ def render_loop(binary, directory):
             if frame.get('type')!='frame':raise RuntimeError(str(frame.get('error',frame.get('type'))))
             if frame.get('arrived') or controls.leave:
                 handoff(controls.leave or 'chat',frame,frame.get('arrived'));break
+            if music:
+                handoff('music',frame)
             w,h=frame['width'],frame['height']
             raw=bytearray(w*h*4)
             with open(frame['path'],'rb') as pixels:
@@ -518,7 +522,7 @@ def render_loop(binary, directory):
             selected=next((a for a in agents if a['key']==(frame.get('hovered') or frame.get('nearest'))),None)
             target=(selected.get('name') or selected['key']) if selected else ''
             title=safe_title('THE GUILD GREEN   ·   '+(target or f'{len(agents)} companions'),cols-1)
-            footer=safe_title(FOOTER_BUTTONS+'   W/S tilt   A/D orbit   Arrows or click to walk   Scroll to zoom   Click companion to chat   N names   H commons   M music',cols-1)
+            footer=safe_title(FOOTER_BUTTONS+'   W/S tilt   A/D orbit   Arrows or click to walk   Scroll to zoom   Click companion to chat   N names   H commons',cols-1)
             hud=(CSI+b'1;1H'+CSI+b'2K'+CSI+b'1;33m'+title.encode()+CSI+b'0m'+f'\x1b[{rows};1H'.encode()+CSI+b'2K'+footer.encode())
             upload,placement=kitty_image(raw,w,h,cols,rows-2,index,compressor)
             output(upload+CSI+b'?2026h'+CSI+b'2;1H'+placement+(hud if hud!=last_hud else b'')+CSI+b'?2026l')
@@ -531,7 +535,7 @@ def render_loop(binary, directory):
                 if pose!=saved:
                     atomic_json(DATA/'runespace-play-position.json',dict(pose,at=int(time.time()*1000)))
                     saved=pose
-            if report:
+            if report and not music:
                 player={'x':frame['x'],'z':frame['z'],'activity':frame.get('playerActivity','idle')}
                 if frame.get('dancePhase') is not None:player['dancePhase']=frame['dancePhase']
                 atomic_json(EVENT,dict(kind='report',id=int(time.time()*1000),report={**{k:frame[k] for k in ('yaw','pitch','zoom','width','height')},'player':player,'npcs':agents,'nearest':frame.get('nearest')}))

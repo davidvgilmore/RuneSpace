@@ -49,7 +49,7 @@ Codex agents are mages, Claude agents are rangers, and Hermes is the guildmaster
 
 Open **Inventory** to change any of seven equipment slots. The 29 cosmetics include all six partyhat colours, dragon chainbody, Bandos tassets, abyssal whip, Elysian spirit shield and fire cape. The two-handed Armadyl godsword takes both hands.
 
-The music panel has three original pieces, including *Lanterns at the Commons* and *Banners at Dawn*. Music carries on when you enter a conversation. The MIDI scores, recordings and rendering notes are included. [Songs of the Guild](layout/mods/runespace/music/README.md)
+Press **M** in the world or click **Music** to open the official 43-track *RuneScape: Original Soundtrack Classics* album. Hit **Play** for *Scape Main*, or scroll to a favourite like *Harmony* or *Sea Shanty 2*. Minimize the player and the music keeps going while you walk or chat. Playback streams from Bandcamp and needs an internet connection. [Soundtrack and listening guide](layout/mods/runespace/music/README.md)
 
 ## Connecting OpenCode and Pi
 
@@ -67,8 +67,10 @@ The installer writes a `runespace-status` extension under Pi's agent directory a
 
 ## License and credits
 
-RuneSpace's original code, artwork and music are available under the [MIT License](LICENSE).
+RuneSpace's original code and artwork are available under the [MIT License](LICENSE).
 
-RuneSpace is an independent fan-made Herdr mod inspired by the 2005–2009 RuneScape era. RuneScape is a trademark of Jagex. The world, character models and soundtrack were made for the mod. The screenshot shows a fictional roster.
+RuneSpace is an independent fan-made Herdr mod inspired by the 2005–2009 RuneScape era. RuneScape is a trademark of Jagex. The world and character models were made for the mod. The screenshot shows a fictional roster.
+
+The official soundtrack is © and ℗ 2018 Jagex Ltd., licensed to Laced Music Ltd. RuneSpace streams it through the official Bandcamp player. [Album and credits](https://runescape-ost.bandcamp.com/album/runescape-original-soundtrack-classics)
 
 The bundled Pixelated MS Sans Serif typefaces are by lou and distributed under CC BY-SA 3.0. [Font credit and license](layout/mods/runespace/fonts/LICENSE-MSSansSerif.txt)

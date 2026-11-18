@@ -103,7 +103,8 @@ final class WorldWindow:NSObject,NSApplicationDelegate,NSWindowDelegate,MTKViewD
 
     func createControls() {
         hud=GuildHUD(in:view,onBack:{[weak self] in self?.goBack()},onNames:{[weak self] in self?.toggleNames()},
-                     onCommons:{[weak self] in self?.goHome()},onInventory:{[weak self] in self?.end(kind:"inventory")},onWalk:{[weak self] x,z in
+                     onCommons:{[weak self] in self?.goHome()},onInventory:{[weak self] in self?.end(kind:"inventory")},
+                     onMusic:{[weak self] in self?.openMusic()},onWalk:{[weak self] x,z in
             guard let self else{return}
             self.engine.call("guildWalk",[x,z])
             self.window.makeFirstResponder(self.view)
@@ -116,7 +117,8 @@ final class WorldWindow:NSObject,NSApplicationDelegate,NSWindowDelegate,MTKViewD
         field.alignment = .center;field.isSelectable=false;field.lineBreakMode = .byTruncatingTail
         return field
     }
-    @objc func goBack(){end(kind:"music")}
+    @objc func goBack(){end(kind:"back")}
+    func openMusic(){sendEvent(kind:"music")}
     @objc func toggleNames(){names.toggle();window.makeFirstResponder(view)}
     @objc func goHome(){engine.call("guildWalk",[0,10.5]);camera.restore([:]);window.makeFirstResponder(view)}
     func orbit(_ angle:Float){camera.yaw+=angle}
@@ -129,6 +131,7 @@ final class WorldWindow:NSObject,NSApplicationDelegate,NSWindowDelegate,MTKViewD
         switch event.keyCode {
         case 5: engine.call("guildDance",[])
         case 34: end(kind:"inventory")
+        case 46: openMusic()
         case 53: engine.call("guildStop",[])
         case 36,76: if let a=nearest(){end(kind:"chat",agent:a.key)}
         case 45: toggleNames()
@@ -235,15 +238,17 @@ final class WorldWindow:NSObject,NSApplicationDelegate,NSWindowDelegate,MTKViewD
             writeJSON(result,to:dataDir.appendingPathComponent("runespace-metal-benchmark.json"));closeProcess()
         }
     }
+    func sendEvent(kind:String,agent:String?=nil){
+        guard !bench else{return}
+        var evt:[String:Any]=["kind":kind,"id":Int64(Date().timeIntervalSince1970*1000),"yaw":camera.yaw,"zoom":camera.zoom,"pitch":camera.pitch]
+        if let p=frame?.player {evt["x"]=p.x;evt["z"]=p.z}
+        if let agent {evt["key"]=agent}
+        writeJSON(evt,to:dataDir.appendingPathComponent("runespace-metal-event.json"))
+    }
     func end(kind:String,agent:String?=nil){
         guard !exiting else{return};exiting=true;view?.isPaused=true
-        if !bench {
-            var evt:[String:Any]=["kind":kind,"id":Int64(Date().timeIntervalSince1970*1000),"yaw":camera.yaw,"zoom":camera.zoom,"pitch":camera.pitch]
-            if let p=frame?.player {evt["x"]=p.x;evt["z"]=p.z}
-            if let agent {evt["key"]=agent}
-            writeJSON(evt,to:dataDir.appendingPathComponent("runespace-metal-event.json"))
-            NSRunningApplication.runningApplications(withBundleIdentifier:"dev.herdr.app").first?.activate(options:[])
-        }
+        sendEvent(kind:kind,agent:agent)
+        if !bench {NSRunningApplication.runningApplications(withBundleIdentifier:"dev.herdr.app").first?.activate(options:[])}
         closeProcess()
     }
     func closeProcess(){

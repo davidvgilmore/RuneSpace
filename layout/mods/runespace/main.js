@@ -1,8 +1,7 @@
 import { View, div, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { props, theme, shared, setShared, exec, checking, run, spaces, agents, machines, terminals, panes, focused, window as appWindow, setWindowTitle, nextCommand, appHome, readTextFile, writeTextFile, layout } from "herdr";
+import { props, theme, shared, setShared, exec, checking, notify, run, spaces, agents, machines, terminals, panes, focused, window as appWindow, setWindowTitle, nextCommand, appHome, readTextFile, writeTextFile, layout } from "herdr";
 import GuildWorld from "./world.js";
-import { GuildSoundtrack } from "./world-music.js";
 import GuildInventory from "./inventory.js";
 import { GameKeys } from "./play-keys.js";
 import { rosterStatus } from "./roster-presence.js";
@@ -19,7 +18,7 @@ function saveCamera(pose) {
   if(Number.isFinite(pitch))camera.pitch=pitch;
   setShared('runespace.worldCamera',camera);
 }
-const isWorld = mode => ['world','metal','play','sound','inventory'].includes(mode);
+const isWorld = mode => ['world','metal','play','sound','world-recovery','inventory'].includes(mode);
 function gameBlock(node){
   if(node?.id==='runespace-game')return node;
   for(const child of node?.children||[]){const found=gameBlock(child);if(found)return found;}
@@ -42,9 +41,6 @@ export default class GuildHall extends View {
     if(checking()) return;
     if(this.role==="header") {
       this.gameFocus=cx.focus_handle();
-      this.music=new GuildSoundtrack();
-      this.music.pulse(cx);
-      cx.timer.every(650,cx=>this.music.pulse(cx));
       const path=appHome()+'/data/runespace-play/held-keys.json';
       this.gameKeys=new GameKeys(()=>readTextFile(path),(text,expected)=>writeTextFile(path,text,expected));
       setWindowTitle("RuneSpace · Herdr");
@@ -67,6 +63,7 @@ export default class GuildHall extends View {
     if(c==='world-classic')this.embedded();
     if(c==='world-window')this.openWindow(cx);
     if(c==='inventory')this.openInventory(cx);
+    if(c==='music')this.openMusic(cx);
     if(c==='inventory-back'&&shared('runespace.mode')==='inventory')this.leaveInventory(cx);
     if(c==='world-benchmark'&&shared('runespace.mode')==='play')setShared('runespace.playBenchmark',{id:Date.now()});
     if(c==='dance'&&['play','metal','world'].includes(shared('runespace.mode')))setShared('runespace.worldCommand',{id:Date.now(),kind:'dance'});
@@ -81,7 +78,7 @@ export default class GuildHall extends View {
   async close() {
     if(this.gameKeys){this.gameKeys.clear();await this.gameKeys.flush();}
     if(this.role==='header'&&!checking())await Promise.all([
-      exec('/usr/bin/python3',[appHome()+'/mods/runespace/music/control.py','stop'],{timeout:2000}),
+      exec('/usr/bin/python3',[appHome()+'/mods/runespace/music/control.py','stop','--app-home',appHome()],{timeout:2000}),
       metal('stop')
     ]);
   }
@@ -98,6 +95,19 @@ export default class GuildHall extends View {
   current() {
     const list=snapshot().agents;
     return list.find(a=>a.key===shared('runespace.selected')) || list.find(a=>a.status==='blocked') || list[0];
+  }
+  openMusic(cx) {
+    if(this.openingMusic)return;
+    this.openingMusic=true;
+    cx.spawn(async () => {
+      try {
+        const result=await exec('/usr/bin/python3',[appHome()+'/mods/runespace/music/control.py',
+          'open','--app-home',appHome()],{timeout:90000});
+        if(result.code!==0)throw Error(result.stderr||result.stdout||'Please try again.');
+      } catch(error) {
+        notify({title:'The soundtrack player could not open',body:String(error).slice(-280),level:'error'});
+      } finally {this.openingMusic=false;}
+    });
   }
   show(mode) {
     if(shared('runespace.mode')==='metal'&&mode!=='metal')metal('stop').catch(()=>{});
@@ -156,7 +166,7 @@ export default class GuildHall extends View {
         this.attachGame(cx);
       } catch (err) {
         if(shared('runespace.mode')==='play'&&shared('runespace.metalSince')===since&&!shared('runespace.playTerminal')){
-          this.show('sound');setShared('runespace.metalState','The embedded game could not open. '+String(err).slice(-220));
+          this.show('world-recovery');setShared('runespace.metalState','The embedded game could not open. '+String(err).slice(-220));
         }
       } finally {this.startingGame=false;cx.notify();}
     });
@@ -268,11 +278,11 @@ export default class GuildHall extends View {
           if(agent && !agent.connectionUnavailable)this.select(agent.key);
           else this.overview();
         } else if(event.kind==='play-error') {
-          this.show('sound');setShared('runespace.metalState','The embedded game stopped. Choose Guild world to reconnect.');
+          this.show('world-recovery');setShared('runespace.metalState','The embedded game stopped. Choose Guild world to reconnect.');
         } else if(event.kind==='inventory') {
           this.showInventory(shared('runespace.mode'));
         } else if(event.kind==='music') {
-          this.show('sound');setShared('runespace.metalState','Choose your music here. Use Guild world above to return to the green.');
+          this.openMusic(cx);
         } else if(event.kind==='back') {
           this.overview();
         }
@@ -295,7 +305,7 @@ export default class GuildHall extends View {
       .child(div().flex_1())
       .child(button('world-nav',isWorld(shared('runespace.mode'))?'Guild world':shared('runespace.fromWorld')?'← Guild world':'Guild world',(_e,cx)=>this.enterWorld(cx),isWorld(shared('runespace.mode'))))
       .when(isWorld(shared('runespace.mode')),e=>e.child(button('inventory-nav','Inventory',(_e,cx)=>this.openInventory(cx),shared('runespace.mode')==='inventory')))
-      .when(isWorld(shared('runespace.mode')),e=>e.child(button('music-nav','♫ Music',()=>{this.show('sound');setShared('runespace.metalState','Choose a track. Guild world returns you to the village.');})))
+      .child(button('music-nav','♫ Music',(_e,cx)=>this.openMusic(cx)))
       .when(isWorld(shared('runespace.mode')),e=>e.child(button('window-nav','Pop out',(_e,cx)=>this.openWindow(cx))))
       .child(button("friends-nav",shared("runespace.friendsOpen")?"Hide friends":"Friends list",()=>this.toggleFriends(),shared("runespace.friendsOpen")))
       .child(button("ledger-nav","Guild overview",()=>this.overview()))
@@ -373,7 +383,8 @@ export default class GuildHall extends View {
         .child(bevel(V().bg(t.surface).p(16).gap(10))
           .child(heading('Guild Green'))
           .child(label('Walk up to a companion to open their terminal. Idle companions gather around the fire.',13,t.muted))
-          .child(button('enter-green','Enter the world',(_e,cx)=>this.enterWorld(cx)))))
+          .child(h_flex().gap(7).flex_wrap().child(button('enter-green','Enter the world',(_e,cx)=>this.enterWorld(cx)))
+            .child(button('ledger-music','♫ Music',(_e,cx)=>this.openMusic(cx))))))
       .child(this.map());
   }
   footer() {

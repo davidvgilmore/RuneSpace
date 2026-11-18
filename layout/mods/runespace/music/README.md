@@ -1,29 +1,15 @@
-# Songs of the Guild
+# RuneScape soundtrack
 
-RuneSpace includes three original compositions. They evoke the General MIDI orchestration and medieval fantasy mood of early online role-playing games. They do not quote RuneScape melodies or use RuneScape recordings or assets.
+Press **M** in the world or click **Music** in the Guild header. Choose a track in the Bandcamp player, or press **Play** to start with *Scape Main*. Minimize the music window or switch back to Herdr to keep listening while you walk or open a conversation. Close the music window to stop playback.
 
-| Piece | Length | Character |
+The player streams *RuneScape: Original Soundtrack Classics*, the 43-track collection released by Jagex and Laced Records in 2018. Playback requires an internet connection. The recordings are credited to Jagex and hosted on Bandcamp. [Official album](https://runescape-ost.bandcamp.com/album/runescape-original-soundtrack-classics) · [Laced Records track list and credits](https://www.lacedrecords.com/products/runescape-original-soundtrack-classics-double-cd-digital-download)
+
+## A listening route
+
+| Around Gielinor | What to listen for | Play the classics |
 | --- | --- | --- |
-| Lanterns at the Commons | 2:02 | A romantic Dorian air in 6/8, with flute, harp, lute, strings and answering oboe |
-| Banners at Dawn | 2:07 | A broad minor-key procession with French horn calls, bowed strings and bells |
-| The Willow Road | 2:02 | A bright Mixolydian walking tune for flute, lute and harp |
-
-Each has a scored introduction, two contrasting melodic sections, return and cadence. The `.mid` files are standard format-1 MIDI; `.score.json` files preserve the note-level arrangements. Playback uses compact AAC renditions with a little hall reverb. The built-in macOS General MIDI sound bank is used during rendering, but is not copied or redistributed with this mod.
-
-Regenerate the scores with `python3 scripts/music-compose.py`, compile `scripts/music-render.swift` using `swiftc -O`, then render each score to WAV and convert with `/usr/bin/afconvert -f m4af -d aac -b 128000 -q 127`. The renderer closes the WAV before conversion and reports peak/RMS levels. `python3 scripts/music-test.py` validates the MIDI and playback assets.
-
-## Native playback
-
-`control.py` is a small CLI for the Guild mod. It compiles `player.swift` into the mod’s local cache when the source changes. The player uses AVAudioPlayer, loops one selected track, and keeps its volume independent from the system volume. State is private to this mod. There is no network listener or Herdr binary change.
-
-- `prepare`: compile without playing any sound.
-- `update --playing true --active true --volume 0.30 --track lanterns`: play/resume. Omit unchanged options.
-- `heartbeat --active true`: refresh the owner heartbeat about every five seconds.
-- `heartbeat --active false`: pause immediately when the world is hidden.
-- `update --playing false`: user pause, preserving the current position.
-- `update --volume 0`: mute; use any value from 0 to 1 for volume.
-- `update --track banners`: switch the selected piece. IDs are `lanterns`, `banners`, and `willow`.
-- `status`: inspect requested and actual playback state.
-- `stop`: stop and exit the mod’s own player.
-
-The player pauses/exits if the owner heartbeat becomes older than 14 seconds. It exits after 15 seconds of inactivity and restores the saved position if resumed. An exclusive lock prevents duplicate players. The helper never terminates other apps or alters audio-device settings. `RUNESPACE_MUSIC_STATE` can select an isolated state directory for muted tests.
+| Logging in and starting out | The opening fanfare gives way to two tunes that feel comfortable enough to spend an afternoon with. | [Scape Main](https://runescape-ost.bandcamp.com/track/scape-main) · [Newbie Melody](https://runescape-ost.bandcamp.com/track/newbie-melody) · [Harmony](https://runescape-ost.bandcamp.com/track/harmony) |
+| Taking the long way home | Follow the lilting phrases of *Autumn Voyage*, the skipping lead of *Flute Salad*, then the gentler pace of *Waterfall*. | [Autumn Voyage](https://runescape-ost.bandcamp.com/track/autumn-voyage) · [Flute Salad](https://runescape-ost.bandcamp.com/track/flute-salad) · [Waterfall](https://runescape-ost.bandcamp.com/track/waterfall) |
+| From desert to docks | *Al Kharid* curls around its steady pulse. Port Sarim's *Sea Shanty 2* has a bouncing little hook you can whistle on the walk to the boat. | [Al Kharid](https://runescape-ost.bandcamp.com/track/al-kharid) · [Sea Shanty 2](https://runescape-ost.bandcamp.com/track/sea-shanty-2) |
+| Mustering for a fight | Hear the ceremonial lift in *Fanfare*, then the insistent rhythm of *Castlewars* and the darker tread of the Stronghold of Security's *Dogs of War*. | [Fanfare](https://runescape-ost.bandcamp.com/track/fanfare) · [Castlewars](https://runescape-ost.bandcamp.com/track/castlewars) · [Dogs of War](https://runescape-ost.bandcamp.com/track/dogs-of-war-2) |
+| Beyond the torchlight | Listen for how much room *Cave Background* leaves between phrases. *Dark* holds the tension, while *Elven Mist* lets the melody wander. | [Cave Background](https://runescape-ost.bandcamp.com/track/cave-background) · [Dark](https://runescape-ost.bandcamp.com/track/dark) · [Elven Mist](https://runescape-ost.bandcamp.com/track/elven-mist) |

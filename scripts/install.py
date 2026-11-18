@@ -79,6 +79,34 @@ def stage_files(stage):
     subprocess.run([node, ROOT / 'scripts/build-metal-assets.mjs', stage / MOD / 'metal'], check=True)
 
 
+def retire_legacy_music(app_home):
+    """Move the previous bundled soundtrack out of the mod, preserving local edits."""
+    mod = app_home / MOD
+    music = mod / 'music'
+    manifest = music / 'manifest.json'
+    if not manifest.is_file():
+        return
+    try:
+        catalog = json.loads(manifest.read_text())
+    except (UnicodeError, ValueError):
+        return
+    if not isinstance(catalog, dict) or catalog.get('title') != 'Songs of the Guild':
+        return
+    tracks = catalog.get('tracks')
+    if not isinstance(tracks, list):
+        return
+    files = [mod / 'world-music.js']
+    for track in tracks:
+        key = track.get('id') if isinstance(track, dict) else None
+        if isinstance(key, str) and re.fullmatch('[a-z0-9-]+', key):
+            files.extend(music / (key + suffix) for suffix in ('.m4a', '.mid', '.score.json'))
+    archive = Path(tempfile.mkdtemp(prefix='runespace-legacy-music-', dir=app_home / 'data'))
+    # Move the manifest last so that a later run can finish an interrupted migration.
+    for file in [*files, manifest]:
+        if file.is_file():
+            file.rename(archive / file.name)
+
+
 def publish(stage, app_home):
     restore_game_binding(app_home / LAYOUT, stage / LAYOUT)
     # A fresh mod first becomes visible with all of its assets present.
@@ -96,6 +124,7 @@ def publish(stage, app_home):
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
         os.replace(source, target)
+    retire_legacy_music(app_home)
 
 
 def main():

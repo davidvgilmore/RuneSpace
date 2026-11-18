@@ -1,67 +1,139 @@
 #!/usr/bin/env python3
-"""Quiet native soundtrack control, scoped entirely to the RuneSpace mod.
+"""Open, show, or close the official soundtrack window for one Herdr home."""
 
-update --playing true --active true --track lanterns --volume .30
-heartbeat --active true        # every ~5 seconds while in the world or an agent conversation
-heartbeat --active false       # pauses immediately when opening the overview or terminals
-status | prepare | stop
-"""
+import argparse
+import fcntl
+import hashlib
+import json
+import os
 from pathlib import Path
-import argparse, fcntl, hashlib, json, os, subprocess, sys, time
-ASSETS=Path(__file__).resolve().parent
-# The installed controller lives under <app-home>/mods/runespace/music.
-APP_HOME = Path(os.environ.get('HERDR_APP_HOME', ASSETS.parents[2])).expanduser()
-STATE = Path(os.environ.get('RUNESPACE_MUSIC_STATE', APP_HOME/'data/runespace-music')).expanduser()
-DEFAULT=dict(playing=False,active=False,volume=.30,track='lanterns',heartbeat=0,quit=False)
+import plistlib
+import secrets
+import subprocess
+import sys
+import time
 
-def read(path,default):
-    try:return json.loads(path.read_text())
-    except (OSError,ValueError):return default.copy()
-def write(path,value):
-    temp=path.with_suffix('.tmp');temp.write_text(json.dumps(value,separators=(',',':')));temp.chmod(0o600);temp.replace(path)
-def prepare():
-    source=ASSETS/'player.swift';digest=hashlib.sha256(source.read_bytes()).hexdigest();binary=STATE/'player'
-    recorded=(STATE/'player.sha256').read_text().strip() if (STATE/'player.sha256').exists() else ''
-    if not binary.exists() or recorded!=digest:
-        built=STATE/'player.build'
-        result=subprocess.run(['/usr/bin/swiftc','-O',str(source),'-o',str(built)],capture_output=True,text=True,timeout=60)
-        if result.returncode:raise RuntimeError('Music player compilation failed: '+result.stderr[-1500:])
-        built.chmod(0o700);built.replace(binary);(STATE/'player.sha256').write_text(digest)
+ASSETS = Path(__file__).resolve().parent
+
+
+def read_json(path):
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def write_json(path, value):
+    temporary = path.with_suffix('.tmp')
+    temporary.write_text(json.dumps(value))
+    temporary.replace(path)
+
+
+def prepare(state):
+    source = ASSETS / 'player.swift'
+    bundle = state / 'RuneSpace Music.app' / 'Contents'
+    binary = bundle / 'MacOS' / 'RuneSpaceMusic'
+    stamp = state / 'station.sha256'
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    if binary.is_file() and stamp.is_file() and stamp.read_text() == digest:
+        return binary
+    binary.parent.mkdir(parents=True, exist_ok=True)
+    staged = binary.with_suffix('.build')
+    build = subprocess.run(['/usr/bin/swiftc', '-swift-version', '5', '-O', str(source), '-o', str(staged)],
+                           capture_output=True, text=True, timeout=100)
+    if build.returncode:
+        raise RuntimeError('RuneSpace Music could not compile. ' + build.stderr.strip()[-1800:])
+    (bundle / 'Info.plist').write_bytes(plistlib.dumps({
+        'CFBundleIdentifier': 'dev.runespace.herdr.music',
+        'CFBundleName': 'RuneSpace Music',
+        'CFBundleDisplayName': 'RuneSpace Music',
+        'CFBundleExecutable': binary.name,
+        'CFBundlePackageType': 'APPL',
+        'CFBundleVersion': '1',
+        'NSHighResolutionCapable': True,
+    }))
+    staged.replace(binary)
+    stamp.write_text(digest)
     return binary
 
-def running():
-    with (STATE/'player.lock').open('a+') as handle:
-        try:fcntl.flock(handle,fcntl.LOCK_EX|fcntl.LOCK_NB)
-        except BlockingIOError:return True
-        fcntl.flock(handle,fcntl.LOCK_UN);return False
+
+def holds_lock(path):
+    with path.open('a+') as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+    return False
+
+
+def status(state):
+    running = holds_lock(state / 'station.lock')
+    return {'ok': True, 'running': running, **(read_json(state / 'station-status.json') if running else {})}
+
+
+def stop_legacy_player(state):
+    # The preceding mod used its own AVAudioPlayer, lock and heartbeat protocol.
+    old_lock = state / 'player.lock'
+    if not old_lock.is_file() or not holds_lock(old_lock):
+        return
+    with (state / 'control.lock').open('a+') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        old = read_json(state / 'control.json')
+        if 'heartbeat' in old and 'playing' in old:
+            write_json(state / 'control.json', dict(old, active=False, quit=True))
+
+
+def run(command, state):
+    if command == 'status':
+        return status(state)
+    if command == 'prepare':
+        return {'ok': True, 'ready': True, 'player': str(prepare(state))}
+    running = holds_lock(state / 'station.lock')
+    if command == 'stop' and not running:
+        return {'ok': True, 'running': False}
+    process = None
+    if command == 'open':
+        stop_legacy_player(state)
+        if not running:
+            binary = prepare(state)
+    request = secrets.token_hex(12)
+    write_json(state / 'station-request.json', {'command': command, 'request': request})
+    if command == 'open' and not running:
+        with (state / 'station.log').open('ab') as log:
+            process = subprocess.Popen([str(binary), str(state)], stdin=subprocess.DEVNULL,
+                                       stdout=log, stderr=log, start_new_session=True)
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        result = status(state)
+        if command == 'stop' and not result['running']:
+            return result
+        if command == 'open' and result.get('request') == request:
+            return result
+        if process and process.poll() is not None:
+            raise RuntimeError(f'RuneSpace Music exited during launch. See {state / "station.log"}')
+        time.sleep(.06)
+    raise RuntimeError(f'RuneSpace Music did not respond to {command}. See {state / "station.log"}')
+
 
 def main():
-    parser=argparse.ArgumentParser(description=__doc__,formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('command',choices=['prepare','update','heartbeat','status','stop'])
-    parser.add_argument('--playing',choices=['true','false']);parser.add_argument('--active',choices=['true','false'])
-    parser.add_argument('--track');parser.add_argument('--volume',type=float)
-    args=parser.parse_args();STATE.mkdir(parents=True,exist_ok=True);STATE.chmod(0o700)
-    with (STATE/'control.lock').open('a+') as lock:
-        fcntl.flock(lock,fcntl.LOCK_EX)
-        if args.command=='prepare':print(json.dumps({'ready':True,'player':str(prepare())}));return
-        control=DEFAULT|read(STATE/'control.json',DEFAULT)
-        if args.command=='status':print(json.dumps({'control':control,'player':read(STATE/'status.json',{}),'running':running()}));return
-        if args.command=='stop':control.update(playing=False,active=False,quit=True)
-        else:
-            control['quit']=False
-            if args.playing is not None:control['playing']=args.playing=='true'
-            if args.active is not None:control['active']=args.active=='true'
-            if args.volume is not None:control['volume']=max(0,min(1,args.volume))
-            if args.track:
-                known={t['id'] for t in read(ASSETS/'manifest.json',{}).get('tracks',[])}
-                if args.track not in known:raise ValueError('Unknown music track')
-                control['track']=args.track
-        control['heartbeat']=time.time();write(STATE/'control.json',control)
-        if control['playing'] and control['active'] and not running():
-            binary=prepare()
-            with (STATE/'player.log').open('ab') as log:
-                subprocess.Popen([str(binary),str(STATE),str(ASSETS)],stdin=subprocess.DEVNULL,stdout=log,stderr=log,start_new_session=True,close_fds=True)
-        print(json.dumps({'ok':True,'playing':control['playing'],'active':control['active'],'track':control['track'],'volume':control['volume']}))
-if __name__=='__main__':
-    try:main()
-    except Exception as error:print(json.dumps({'ok':False,'error':str(error)}));sys.exit(1)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('command', choices=['open', 'stop', 'status', 'prepare'])
+    parser.add_argument('--app-home', type=Path)
+    args = parser.parse_args()
+    home = args.app_home or Path(os.environ.get('HERDR_APP_HOME', ASSETS.parents[2]))
+    state = home.expanduser() / 'data/runespace-music'
+    if args.app_home is None and 'RUNESPACE_MUSIC_STATE' in os.environ:
+        state = Path(os.environ['RUNESPACE_MUSIC_STATE']).expanduser()
+    state = state.resolve()
+    state.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with (state / 'station-control.lock').open('a+') as guard:
+        fcntl.flock(guard, fcntl.LOCK_EX)
+        print(json.dumps(run(args.command, state)))
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+        print(json.dumps({'ok': False, 'error': str(error)}))
+        sys.exit(1)

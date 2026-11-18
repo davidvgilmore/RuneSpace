@@ -3,7 +3,6 @@ import {h_flex} from 'gpui-base';
 import {shared,setShared,checking,run,exec,appHome} from 'herdr';
 import {Simulation,Camera,Mesh,character,ACTIVITY,HOST_COLOR,clipFor,poseFor,animationPhase,clamp,clampPitch,DEFAULT_PITCH,distance,TAU} from './world-engine.js';
 import {packFaces,sameFaces} from './world-packing.js';
-import GuildMusic from './world-music.js';
 import {normalizeLoadout} from './equipment.js';
 
 const V=()=>div().flex().flex_col().items_stretch().justify_start();
@@ -41,7 +40,6 @@ export default class GuildWorld extends View {
     this.projected=[];this.drag=null;this.renderTime=0;
     this.poses=new Map();this.actors=new Map();this.groundActors=new Map();this.staticProjection=null;this.staticCamera='';
     this.scene=++sceneId;scenes.set(this.scene,new Map());this.layers=[];this.bandCache=new Map();this.bandLayers=new Map();
-    this.music=cx.new(GuildMusic);
     const saved=shared('runespace.worldPosition');if(saved&&!this.sim.blocked(saved.x,saved.z)){this.sim.player.x=saved.x;this.sim.player.z=saved.z;}
     this.follow={x:this.sim.player.x*.60,z:this.sim.player.z*.45-3};
     if(checking())return;
@@ -165,6 +163,7 @@ export default class GuildWorld extends View {
       this.keys.g=down;cx.stop_propagation();
     }
     if(!down)return;
+    if(key==='m'){if(!e.is_held)run('runespace.music');cx.stop_propagation();return;}
     if(key==='i'){this.openInventory();cx.stop_propagation();return;}
     if(key==='enter'||key==='return'){const p=this.sim.nearest();if(p)this.openChat(p.key);cx.stop_propagation();}
     if(key==='escape'){this.sim.stopDance();this.sim.path=[];this.sim.targetKey=null;this.hint='Walk cancelled.';cx.stop_propagation();}
@@ -178,8 +177,6 @@ export default class GuildWorld extends View {
   }
   pointer(e,cx){
     if(!e.local_position)return;
-    // Leave native slider drags to the music panel without sending the player there.
-    if(e.local_position.x>this.width-204&&e.local_position.y>=282&&e.local_position.y<=550)return;
     this.focus.focus();
     const key=this.pick(e.local_position);
     if(key)this.talk(key);else this.walk(this.camera.ground(e.local_position.x,e.local_position.y));
@@ -267,13 +264,12 @@ export default class GuildWorld extends View {
       .child(h_flex().gap(5).child(button('world-home','Commons',()=>this.home())).child(button('world-names',this.names?'Names on':'Names',()=>{this.names=!this.names;},this.names)));
   }
   render(cx){
-    if(['metal','play','sound'].includes(shared('runespace.mode')))return div().relative().size_full().bg('#22281f')
+    if(['metal','play','sound','world-recovery'].includes(shared('runespace.mode')))return div().relative().size_full().bg('#22281f')
       .child(panel().absolute().top(24).left(24).right(24)
         .child(text('The Guild Green',24,'#efcf76').font_family('Georgia'))
         .child(text(shared('runespace.metalState')||'Open the game window to enter RuneSpace.',14))
         .child(text('Click a companion to walk over and open their conversation here.',13))
-        .child(h_flex().gap(8).child(button('embedded-world','Classic view',()=>{setShared('runespace.mode','world');exec('/usr/bin/python3',[appHome()+'/mods/runespace/metal/control.py','stop','--app-home',appHome()]);}))))
-      .child(this.music);
+        .child(h_flex().gap(8).child(button('embedded-world','Classic view',()=>{setShared('runespace.mode','world');exec('/usr/bin/python3',[appHome()+'/mods/runespace/metal/control.py','stop','--app-home',appHome()]);}))));
     const nearest=this.sim.nearest(),hovered=this.sim.npcs.get(this.hover),talking=hovered||nearest;
     const roster=[...this.sim.npcs.values()],workers=roster.filter(a=>a.status==='working').length,idle=roster.filter(a=>a.status==='idle').length;
     const root=div().id('runespace-world').relative().size_full().min_w(0).min_h(0).overflow_hidden().bg('#8f9e77').track_focus(this.focus).key_context('GuildWorld')
@@ -307,7 +303,9 @@ export default class GuildWorld extends View {
       .child(text(this.sim.wasStale?'Reconnecting to your company…':workers+' working  ·  '+idle+' at the commons',12,'#c9c5a6'))
       .child(text(hovered?'Talk-to '+hovered.name:'Click the ground to walk. Click a companion to chat.',12,'#f3e0a6').font_family('Geist')));
     root.child(this.minimap());
-    root.child(this.music);
+    root.child(h_flex().absolute().right(18).top(252)
+      .on_mouse_down('left',(_e,cx)=>cx.stop_propagation())
+      .child(button('world-music','♫ Music  M',()=>run('runespace.music'))));
     root.child(h_flex().absolute().bottom(16).left(18).right(18).gap(14).items_end()
       .on_mouse_down('left',(_e,cx)=>cx.stop_propagation())
       .child(panel().flex_1().max_w(530)
