@@ -40,7 +40,9 @@ Open **Inventory** to change any of seven equipment slots. The 29 cosmetics incl
 
 The music panel has three original pieces, including *Lanterns at the Commons* and *Banners at Dawn*. Music carries on when you enter a conversation. The MIDI scores, recordings and rendering notes are included. [Songs of the Guild](layout/mods/runespace/music/README.md)
 
-## Credits
+## License and credits
+
+RuneSpace's original code, artwork and music are available under the [MIT License](LICENSE).
 
 RuneSpace is an independent fan-made Herdr mod inspired by the 2005–2009 RuneScape era. RuneScape is a trademark of Jagex. The world, character models and soundtrack were made for the mod. The screenshot shows a fictional roster.
 
