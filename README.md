@@ -2,7 +2,18 @@
 
 RuneSpace turns your Herdr agents into characters in a little medieval town. A working agent might swing a pick at the quarry or cast a line from the riverbank. Walk up to them and click to open their terminal. When they're ready for another task, look for them around the fire.
 
+## Gameplay demo
+
+Take a 52-second walk around the guild, open an agent's conversation, and return to the green.
+
+https://github.com/user-attachments/assets/b9d74557-109c-4cc7-8af1-ad63f4224a7f
+
+<details>
+<summary>Guild world screenshot</summary>
+
 ![A crowned adventurer meets agent companions around the guild fire, with miners, blacksmiths and anglers working nearby.](docs/guild-world.png)
+
+</details>
 
 ## Install on macOS
 
