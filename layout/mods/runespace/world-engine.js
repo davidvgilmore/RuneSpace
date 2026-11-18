@@ -185,7 +185,7 @@ class Adventure {
     this.entities=ADVENTURE_SPAWNS.map(spawn=>{
       const type=ADVENTURE_TYPES[spawn.kind];
       return {...spawn,height:type.height,maxHp:type.maxHp,hp:type.maxHp,yaw:Math.PI,
-        activity:'idle',posePhase:0,respawnAt:0,depletions:0};
+        activity:'idle',posePhase:0,respawnAt:0,respawnBy:0,depletions:0};
     });
     this.targetKey=null;
     this.turn=null;
@@ -193,6 +193,7 @@ class Adventure {
     this.startedAt=0;
     this.exchange=0;
     this.nextHeal=0;
+    this.wallClockOffset=0;
     this.message='';
     this.messageUntil=0;
     this.hp=this.maxHp=PLAYER_MAX_HP;
@@ -206,12 +207,12 @@ class Adventure {
     this.messageUntil=time+6;
   }
   step(sim) {
-    const now=sim.time;
+    const now=sim.time,wallNow=Date.now()+this.wallClockOffset;
     if(sim.player.hit&&now>=sim.player.hitUntil)sim.player.hit=0;
     for(const e of this.entities){
       if(e.hit&&now>=e.hitUntil)e.hit=0;
-      if(e.respawnAt&&now>=e.respawnAt){
-        e.activity='idle';e.hp=e.maxHp;e.respawnAt=0;this.revision++;
+      if(e.respawnAt&&(now>=e.respawnAt||wallNow>=e.respawnBy)){
+        e.activity='idle';e.hp=e.maxHp;e.respawnAt=0;e.respawnBy=0;this.revision++;
       }
       e.posePhase=e.activity==='attack'
         ?clamp((now-this.startedAt)/MOTION.attack.seconds,0,1-Number.EPSILON)
@@ -292,7 +293,9 @@ class Adventure {
   }
   finish(sim,e,activity,message) {
     sim.cancelAdventure();
-    e.hp=0;e.activity=activity;e.respawnAt=sim.time+ADVENTURE_TYPES[e.kind].cooldown;
+    const seconds=ADVENTURE_TYPES[e.kind].cooldown;
+    e.hp=0;e.activity=activity;e.respawnAt=sim.time+seconds;
+    e.respawnBy=Date.now()+this.wallClockOffset+seconds*1000;
     e.depletions++;
     this.revision++;
     this.say(message,sim.time);
@@ -473,7 +476,10 @@ export class Simulation {
     const {logs,woodXp,combatXp,hp,entities}=this.adventure;
     const respawns={},depletions={};
     for(const e of entities){
-      if(e.respawnAt>this.time)respawns[e.key]=now+Math.round((e.respawnAt-this.time)*1000);
+      // A hidden view stops stepping. Its previous deadline still applies
+      // when another action or a delayed writer triggers a save.
+      const until=Math.min(e.respawnBy,now+Math.round((e.respawnAt-this.time)*1000));
+      if(until>now)respawns[e.key]=until;
       if(e.depletions)depletions[e.key]=e.depletions;
     }
     return {version:1,logs,woodXp,combatXp,hp,respawns,depletions};
@@ -487,6 +493,7 @@ export class Simulation {
   reconcileAdventure(saved,now=Date.now()){
     if(!saved||saved.version!==1)return false;
     const a=this.adventure;
+    a.wallClockOffset=now-Date.now();
     for(const key of ['logs','woodXp','combatXp']){
       a[key]=progressCount(saved[key]);
     }
@@ -502,6 +509,7 @@ export class Simulation {
         this.cancelAdventure();
       }
       e.respawnAt=remaining?this.time+remaining:0;
+      e.respawnBy=remaining?now+Math.round(remaining*1000):0;
       e.hp=remaining?0:e.maxHp;
       e.activity=remaining?(e.kind==='oak'?'stump':'hidden'):'idle';
     }

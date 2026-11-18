@@ -164,6 +164,23 @@ test('a paused oak stays regrown even when its neighbor is chopped in the stale 
   assert.deepEqual(raced.respawns,{'oak-by-lane':120000});
 });
 
+test('a suspended standalone renderer cannot extend a cooldown on disk or on the map',t=>{
+  t.mock.timers.enable({apis:['Date'],now:100000});
+  const sim=new Simulation(),key='oak-by-market',oak=entity(sim,key);
+  sim.interact(key);
+  until(sim,()=>oak.activity==='stump');
+  const initial=sim.saveAdventure();
+  assert.equal(initial.respawns[key],120000);
+  t.mock.timers.tick(10000);
+  assert.equal(sim.saveAdventure().respawns[key],120000);
+  t.mock.timers.tick(10001);
+  assert.deepEqual(sim.saveAdventure().respawns,{});
+  sim.step(.016);
+  assert.equal(oak.activity,'idle');
+  assert.equal(sim.adventure.logs,1);
+  assert.ok(sim.interact(key));
+});
+
 test('old saves without event counts can earn rewards and do not reanimate expired cooldowns',()=>{
   const base={version:1,hp:10,logs:1,woodXp:25,respawns:{'oak-by-lane':90000}};
   const local={...base,respawns:{'oak-by-lane':120000}};
