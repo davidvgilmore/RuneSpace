@@ -4,7 +4,6 @@ import {shared,setShared,checking,run,exec,appHome} from 'herdr';
 import {Simulation,Camera,Mesh,character,ACTIVITY,HOST_COLOR,clipFor,poseFor,animationPhase,clamp,clampPitch,DEFAULT_PITCH,distance,TAU} from './world-engine.js';
 import {packFaces,sameFaces} from './world-packing.js';
 import GuildMusic from './world-music.js';
-import {classFor} from './world-art.js';
 import {normalizeLoadout} from './equipment.js';
 
 const V=()=>div().flex().flex_col().items_stretch().justify_start();
@@ -12,7 +11,7 @@ const text=(s,size=13,c='#e9dfbf')=>div().text_size(size).text_color(c).child(s)
 const button=(id,s,fn,active=false)=>h_flex().id(id).h(29).px(10).items_center().justify_center().bg(active?'#4d5937':'#403f31').border(1).border_color('#8e8059').cursor_pointer().hover(e=>e.bg('#5b5d3f')).on_click(fn).child(text(s,12,active?'#ffe289':'#e8d9b1'));
 const panel=()=>V().bg('#272a21ee').border(2).border_color('#817656').p(12).gap(5);
 const statusColor=s=>s==='working'?'#bdd48c':s==='blocked'||s==='error'?'#f3b36e':s==='unknown'?'#aaaa95':'#ddc680';
-const companions=snap=>snap.agents.filter(a=>a.mapVisible!==false);
+const elevationOf=p=>p.x>-18.8&&p.x<-13.3&&p.z>1.9&&p.z<4.1?.43:0;
 
 // Each retained layer has a bounded render. Native geometry is immutable and reusable;
 // element descriptions are rebuilt for every pass, as GPUI requires.
@@ -75,7 +74,7 @@ export default class GuildWorld extends View {
     }
     if(!this.focus.is_focused())this.keys={};
     const snap=shared('runespace.snapshot')||{agents:[]},stale=!snap.at||now/1000-snap.at>35;
-    this.sim.sync(companions(snap),stale);
+    this.sim.sync(snap.agents,stale);
     if(this.cacheRevision!==this.sim.revision){
       this.cacheRevision=this.sim.revision;
       for(const key of this.poses.keys())if(key!==this.sim.player.key&&!this.sim.npcs.has(key)){
@@ -191,7 +190,7 @@ export default class GuildWorld extends View {
     const cameraKey=[this.width,this.height,this.yaw.toFixed(3),this.zoom.toFixed(3),this.pitch.toFixed(3)].join('|'),camera=this.meshCamera,padding=Math.max(this.width,this.height);
     // Ground selection ring and shadows use the same camera projection as the meshes.
     for(const p of [...this.sim.npcs.values(),this.sim.player]){
-      const elevation=p.x>-18.8&&p.x<-13.3&&p.z>1.9&&p.z<4.1?.43:0;
+      const elevation=elevationOf(p);
       const groundKey=cameraKey+'|'+p.x+'|'+p.z+'|'+(p.player||p.key===this.hover||p.key===this.sim.targetKey);
       let ground=this.groundActors.get(p.key);
       if(!ground||ground.key!==groundKey){
@@ -235,7 +234,10 @@ export default class GuildWorld extends View {
   labels(){
     const p=this.sim.player,nearest=[...this.sim.npcs.values()].sort((a,b)=>distance(a,p)-distance(b,p)).slice(0,2).filter(a=>distance(a,p)<6),visible=new Set(nearest.map(a=>a.key));
     if(this.hover)visible.add(this.hover);if(this.sim.targetKey)visible.add(this.sim.targetKey);
-    this.projected=[...this.sim.npcs.values()].map(p=>({key:p.key,feet:this.camera.project([p.x,0,p.z]),head:this.camera.project([p.x,({Codex:2.4,Hermes:2.52,Claude:2.04,OpenCode:2.02})[p.kind]||1.95,p.z])}));
+    this.projected=[...this.sim.npcs.values()].map(p=>{
+      const elevation=elevationOf(p);
+      return {key:p.key,feet:this.camera.project([p.x,elevation,p.z]),head:this.camera.project([p.x,elevation+p.height,p.z])};
+    });
     const elements=[];
     for(const h of this.projected){
       if(h.head.x<20||h.head.x>this.width-20||h.head.y<65||h.feet.y>this.height-85)continue;
@@ -265,7 +267,6 @@ export default class GuildWorld extends View {
       .child(h_flex().gap(5).child(button('world-home','Commons',()=>this.home())).child(button('world-names',this.names?'Names on':'Names',()=>{this.names=!this.names;},this.names)));
   }
   render(cx){
-    const snap=shared('runespace.snapshot')||{agents:[],hosts:[]};
     if(['metal','play','sound'].includes(shared('runespace.mode')))return div().relative().size_full().bg('#22281f')
       .child(panel().absolute().top(24).left(24).right(24)
         .child(text('The Guild Green',24,'#efcf76').font_family('Georgia'))
@@ -274,7 +275,7 @@ export default class GuildWorld extends View {
         .child(h_flex().gap(8).child(button('embedded-world','Classic view',()=>{setShared('runespace.mode','world');exec('/usr/bin/python3',[appHome()+'/mods/runespace/metal/control.py','stop','--app-home',appHome()]);}))))
       .child(this.music);
     const nearest=this.sim.nearest(),hovered=this.sim.npcs.get(this.hover),talking=hovered||nearest;
-    const roster=companions(snap),workers=roster.filter(a=>a.status==='working').length,idle=roster.filter(a=>a.status==='idle').length;
+    const roster=[...this.sim.npcs.values()],workers=roster.filter(a=>a.status==='working').length,idle=roster.filter(a=>a.status==='idle').length;
     const root=div().id('runespace-world').relative().size_full().min_w(0).min_h(0).overflow_hidden().bg('#8f9e77').track_focus(this.focus).key_context('GuildWorld')
       .on_size_change((s,cx)=>{this.width=s.width;this.height=s.height;cx.notify();})
       .on_mouse_down('left',(e,cx)=>this.pointer(e,cx))
@@ -311,7 +312,7 @@ export default class GuildWorld extends View {
       .on_mouse_down('left',(_e,cx)=>cx.stop_propagation())
       .child(panel().flex_1().max_w(530)
         .child(text(talking?talking.name:this.sim.path.length?this.hint:'Your company, in one world.',16,'#f3d585').font_family('Georgia'))
-        .child(text(talking?((talking.machineName || talking.host)+' · '+talking.kind+' '+classFor(talking.kind)+' · '+ACTIVITY[talking.activity]):'Idle companions gather by the fire. Working companions practise their skills.',12,'#d7d2b5').font_family('Geist'))
+        .child(text(talking?((talking.machineName || talking.host)+' · '+talking.kind+' '+talking.guildClass+' · '+ACTIVITY[talking.activity]):'Idle companions gather by the fire. Working companions practise their skills.',12,'#d7d2b5').font_family('Geist'))
         .when(!!talking,e=>e.child(h_flex().gap(8).items_center().child(button('talk-npc',nearest?.key===talking?.key?'Open chat  ↵':'Walk over & chat',()=>nearest?.key===talking?.key?this.openChat(talking.key):this.talk(talking.key),true)).child(text('Opens this existing session',10,'#bab99e')))))
       .child(div().flex_1())
       .child(panel().w(255).child(text('W/S  Tilt     A/D  Rotate     Scroll  Zoom',12,'#ddcf9e')).child(text('Arrow keys or click  Walk     Enter  Chat',11,'#c1bea2')).child(text('Right-drag to orbit · N names · Esc cancels walking',10,'#a7ac91'))));

@@ -162,7 +162,7 @@ final class WorldWindow:NSObject,NSApplicationDelegate,NSWindowDelegate,MTKViewD
         let allowed=Set(visible.map(\.key))
         for key in Array(labels.keys) where !allowed.contains(key){labels.removeValue(forKey:key)?.removeFromSuperview()}
         for a in visible {
-            let p=camera.screen(a.x,a.elevation+2.4,a.z)
+            let p=camera.screen(a.x,a.elevation+a.height,a.z)
             let field=labels[a.key] ?? label(a.name ?? "Companion")
             if labels[a.key]==nil {view.addSubview(field,positioned:.below,relativeTo:hud);labels[a.key]=field}
             if field.stringValue != a.name {field.stringValue=a.name ?? a.key}

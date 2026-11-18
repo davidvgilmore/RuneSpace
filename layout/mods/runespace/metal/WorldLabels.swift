@@ -61,7 +61,7 @@ final class WorldLabels {
         let gap = max(1,Int(rasterScale.rounded()))
         placed.removeAll(keepingCapacity:true)
         func paint(_ actor: Actor, highlighted: Bool) {
-            let anchor = camera.screen(actor.x,actor.elevation+2.5,actor.z)
+            let anchor = camera.screen(actor.x,actor.elevation+actor.height,actor.z)
             guard anchor.x >= 0, anchor.x <= CGFloat(width), anchor.y >= 0, anchor.y <= CGFloat(height),
                   let text = bitmap(actor,highlighted:highlighted), text.width <= width, text.height <= height else { return }
             let x = max(0,min(width-text.width,Int(anchor.x.rounded())-text.width/2))

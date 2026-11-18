@@ -83,3 +83,59 @@ test('first observation starts idle age when Herdr has no timestamps',()=>{
   assert.equal(first(fresh).lastActivityAt,900);
   assert.equal(rosterStatus(first(sample(900+timeout,fresh,data))),'offline');
 });
+
+test('Pi and OpenCode honor reported states across working, blocked, idle, offline, and resumed work', () => {
+  for (const [kind, app] of [['Pi', 'pi'], ['OpenCode', 'opencode']]) {
+    const address = 'remote/t1';
+    let previous;
+    const poll = (status, time, statusTime = time) => {
+      const report = {app, state: status, title: 'Map the orchard'};
+      const program = {key: app, name: kind, agent: true};
+      const data = {
+        ...source, spaces: [],
+        agents: [{...agent, address, app, status, program}],
+        terminals: [{...terminal, address, status, report, program, status_ms: statusTime * 1000}],
+      };
+      previous = sample(time, previous, data);
+      assert.equal(previous.agents.length, 1);
+      const a = first(previous);
+      assert.deepEqual([a.key, a.kind, a.openAction, a.name], [address, kind, 'agent.focus', report.title]);
+      return a;
+    };
+    for (const [time, status] of [[100, 'working'], [110, 'blocked'], [120, 'error'], [130, 'done']]) {
+      assert.equal(rosterStatus(poll(status, time)), status === 'done' ? 'idle' : status);
+    }
+    assert.equal(poll('idle', 130 + timeout, 130).mapVisible, false);
+    assert.equal(poll('working', 131 + timeout).mapVisible, true);
+  }
+});
+
+test('unreported interactive harnesses use their real pane or parked terminal until the first native report', () => {
+  const launch = (address, argv) => ({address, state:'live', status:null,
+    program:{key:'program', name:'node', agent:false}, foreground:{argv}});
+  const terminals = [
+    launch('t1', ['node', '/lib/@earendil-works/pi-coding-agent/dist/cli.js', '--offline']),
+    launch('peer/t1', ['/bin/opencode', '--server', 'http://localhost', 'mini']),
+    launch('t2', ['pi', '--mode', 'rpc']),
+    launch('t3', ['opencode', '--log-level', 'info', 'serve']),
+    launch('t4', ['opencode', 'web']),
+    launch('t5', ['node', '/tool/cli.js', 'pi']),
+    launch('t6', ['pi', '-p', 'Summarize']),
+    launch('t7', ['pi', 'install', 'extension']),
+    launch('t8', ['opencode', 'run', 'Summarize']),
+    {...launch('t9', ['/bin/zsh', '-i']), argv:['opencode'], program:{key:'shell', name:'zsh', agent:false}},
+    launch('t10', ['opencode', '--prompt', 'serve']),
+    launch('t11', ['pig']),
+  ];
+  const data = {...source, agents:[], terminals, panes:[{terminal:'t1', tab:tab.id}]};
+  const before = sample(10, null, data);
+  assert.deepEqual(before.agents.map(a=>[a.key, a.kind, a.status, a.openAction]), [
+    ['t1','Pi','unknown','pane.focus'], ['peer/t1','OpenCode','unknown','terminal.peek'],
+    ['t10','OpenCode','unknown','terminal.peek'],
+  ]);
+  const piProgram = {key:'pi',name:'Pi',agent:true};
+  const reports = {...data, agents:[{...agent, app:'pi',program:piProgram,status:'working'}]};
+  const pi = first(sample(20, before, reports));
+  assert.deepEqual([pi.key, pi.status, pi.kind, pi.openAction], ['t1','working','Pi','agent.focus']);
+  assert.ok(!sample(25, before, {...data, terminals:terminals.slice(1)}).agents.some(a=>a.key==='t1'));
+});

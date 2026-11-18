@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Mesh, STATIONS, hash } from '../layout/mods/runespace/world-engine.js';
-import { WORK_CYCLES, buildCharacter, buildWorldArt, playerDancePose } from '../layout/mods/runespace/world-art.js';
+import { NPC_KINDS, WORK_CYCLES, buildCharacter, buildWorldArt, classFor, playerDancePose } from '../layout/mods/runespace/world-art.js';
 
 class Materials extends Mesh {
   face(points,color) { super.face(points,color,false); }
 }
 const world = buildWorldArt(Materials,hash).mesh;
 const sample = (job,phase,kind='Claude') =>
-  buildCharacter(Materials,hash,{key:'sample',host:'local',kind,activity:job,posePhase:phase},0);
+  buildCharacter(Materials,hash,{key:'sample',host:'local',kind,moving:job==='walk',activity:job,posePhase:phase},0);
 const only = (mesh,colors) => mesh.faces.filter(f=>colors.includes(f.color));
 const difference=(a,b)=>a.map((v,i)=>v-b[i]);
 const dot=(a,b)=>a.reduce((n,v,i)=>n+v*b[i],0);
@@ -25,9 +25,31 @@ test('front-facing characters hold their main weapon on viewer-left and shields 
   check(warrior,['#6d4c35'],-1);check(warrior,['#56778b','#7896a6'],1);
   check(sample('idle',0,'Codex'),['#86dadb'],-1);
   check(sample('idle',0,'Claude'),['#ad7841'],-1);
+  check(sample('idle',0,'Pi'),['#805a38'],-1);
   for(const activity of ['idle','walk','dance'])for(let frame=0;frame<40;frame++){
     const mesh=buildCharacter(Materials,hash,{player:true,activity,moving:activity==='walk',posePhase:frame/40},0);
     check(mesh,['#833c37'],-1);check(mesh,['#b8bcc2','#d5d0ce'],1);
+  }
+});
+
+test('OpenCode warriors and Pi druids sling their own gear to use the station tools',()=>{
+  const tools={wood:'#8e9da0',mine:'#9daaaa',smith:'#82918e',fish:'#d8623c',farm:'#b7beb0'};
+  for(const [kind,job,gear] of [
+    ['OpenCode','Warrior',['#6d4c35','#56778b']],
+    ['Pi','Druid',['#805a38']],
+  ]){
+    assert.equal(classFor(kind),job);
+    assert.ok(NPC_KINDS.includes(kind));
+    for(const activity of ['walk',...Object.keys(tools)]){
+      const mesh=sample(activity,.5,kind);
+      const gearPoints=only(mesh,gear).flatMap(f=>f.points);
+      assert.ok(gearPoints.length && gearPoints.every(p=>p[2]<0),kind+' stows gear for '+activity);
+      if(activity==='walk')continue;
+      const movingTool=only(mesh,[tools[activity]]);
+      assert.ok(movingTool.length,kind+' has a tool for '+activity);
+      assert.deepEqual(movingTool,only(sample(activity,.5,'Codex'),[tools[activity]]));
+      assert.notDeepEqual(movingTool,only(sample(activity,.20,kind),[tools[activity]]));
+    }
   }
 });
 
@@ -116,7 +138,7 @@ test('fishing sends the float into the river and draws it back, farming pulls pl
 });
 
 test('each working class has stable finite geometry and planted feet across its entire baked loop',()=>{
-  for(const kind of ['Codex','Claude','OpenCode','Hermes'])for(const job of Object.keys(WORK_CYCLES).filter(s=>s!=='idle'&&s!=='walk')){
+  for(const kind of NPC_KINDS)for(const job of Object.keys(WORK_CYCLES).filter(s=>s!=='idle'&&s!=='walk')){
     const counts=new Set();
     for(let i=0;i<24;i++){
       const mesh=sample(job,i/24,kind);

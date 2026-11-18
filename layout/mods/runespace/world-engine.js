@@ -1,4 +1,4 @@
-import {buildWorldArt,buildCharacter,TREES,ROCKS,WORK_CYCLES} from './world-art.js';
+import {buildWorldArt,buildCharacter,TREES,ROCKS,WORK_CYCLES,classFor,heightFor} from './world-art.js';
 export {TREES,ROCKS};
 // Original low-poly geometry and a small walking simulation. No renderer or network dependencies.
 export const TAU=Math.PI*2;
@@ -203,10 +203,10 @@ export class Simulation {
     return out;
   }
   sync(agents,stale=false){
-    const revision=JSON.stringify(agents.map(a=>[a.key,a.status,a.name,a.kind,a.host]).sort((a,b)=>a[0].localeCompare(b[0])))+stale;
+    const sorted=agents.filter(a=>a.mapVisible!==false).sort((a,b)=>a.key.localeCompare(b.key));
+    const revision=JSON.stringify(sorted.map(a=>[a.key,a.status,a.name,a.kind,a.host]))+stale;
     if(revision===this.revision)return;
     this.revision=revision;this.wasStale=stale;
-    const sorted=[...agents].sort((a,b)=>a.key.localeCompare(b.key));
     const assigned=new Map(),occupied=Object.fromEntries([...SKILLS,'commons'].map(g=>[g,new Set()]));
     const reserve=(key,group,slot)=>{assigned.set(key,{group,slot});occupied[group].add(slot);};
     // Existing workers keep their real workstation when a peer joins, changes
@@ -250,7 +250,7 @@ export class Simulation {
       }else if(p.dest!==dest){
         p.path=this.findPath(p,dest);
       }
-      Object.assign(p,a,{activity,dest,slot,slotGroup:group});
+      Object.assign(p,a,{activity,dest,slot,slotGroup:group,guildClass:classFor(a.kind),height:heightFor(a.kind)});
       if(group!=='commons')p.lastWork={group,slot};
       if(!p.path.length)p.yaw=Math.atan2(dest.faceX-p.x,dest.faceZ-p.z);
     }

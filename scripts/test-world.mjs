@@ -5,6 +5,38 @@ import {Simulation,Camera,Mesh,distance,STATIONS,character,clipFor,poseFor,anima
 const agent=(i,status='idle')=>({key:`${i%3===0?'remote':i%3===1?'local':'other'}/session:${i}`,name:`Project ${i}`,status,host:i%3===0?'remote':i%3===1?'local':'other',kind:'Codex'});
 const settle=(sim,max=1000)=>{for(let i=0;i<max;i++)sim.step(.05);};
 
+test('OpenCode and Pi can meet, work, chat, leave the map and return on the same address',()=>{
+  const sim=new Simulation();
+  const agents=[
+    {key:'remote/t7',kind:'Pi',name:'Tend the orchard',host:'remote',status:'idle'},
+    {key:'t9',kind:'OpenCode',name:'Repair the bridge',host:'local',status:'idle'},
+  ];
+  sim.sync(agents);
+  for(const a of agents){
+    const npc=sim.npcs.get(a.key);
+    assert.equal(npc.guildClass,a.kind==='Pi'?'Druid':'Warrior');
+    assert.ok(npc.height>1.9);
+    assert.equal(npc.slotGroup,'commons');
+  }
+  const working=agents.map(a=>({...a,status:'working'}));
+  sim.sync(working);
+  settle(sim);
+  for(const {key} of agents){
+    assert.ok(Object.hasOwn(STATIONS,poseFor(sim.npcs.get(key))));
+    assert.ok(sim.approach(key));
+    settle(sim);
+    assert.equal(sim.arrived,key);
+  }
+  sim.sync(agents);
+  settle(sim);
+  assert.ok(agents.every(a=>sim.npcs.get(a.key).slotGroup==='commons'));
+  sim.sync(agents.map(a=>({...a,mapVisible:false})));
+  assert.equal(sim.npcs.size,0);
+  assert.ok(agents.every(a=>!sim.approach(a.key)));
+  sim.sync(working);
+  assert.ok(agents.every(a=>sim.npcs.has(a.key)));
+});
+
 test('the equipped fire cape animates at rest while idle companions reuse one frame',()=>{
   const player=new Simulation().player,companion=agent(0);
   const clip=clipFor(player,'idle');

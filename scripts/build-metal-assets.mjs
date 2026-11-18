@@ -5,6 +5,7 @@ import {resolve} from 'node:path';
 import {createHash} from 'node:crypto';
 import {DEFAULT_LOADOUT,EQUIPMENT_ITEMS,PLAYER_PARTS,playerPartKey} from '../layout/mods/runespace/equipment.js';
 import {character,makeWorld,MOTION,PLAYER_IDLE_CLIP,clipFor} from '../layout/mods/runespace/world-engine.js';
+import {NPC_KINDS} from '../layout/mods/runespace/world-art.js';
 
 const mod = new URL('../layout/mods/runespace/', import.meta.url);
 const output = process.argv[2] ? resolve(process.argv[2]) : fileURLToPath(new URL('metal/', mod));
@@ -28,7 +29,7 @@ function triangles(mesh) {
   return Buffer.from(new Float32Array(vertices).buffer).toString('base64');
 }
 const actors={};
-for (const kind of ['Codex','Claude','OpenCode','Hermes','Adventurer']) {
+for (const kind of NPC_KINDS) {
   for (const host of ['local','remote','other']) {
     const key=kind+'/'+host;
     for (const pose of Object.keys(MOTION)) {

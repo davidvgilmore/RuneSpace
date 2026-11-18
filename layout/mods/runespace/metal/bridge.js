@@ -12,8 +12,7 @@ function guildInit(savedPositionJSON) {
   }
 }
 function guildSync(agentsJSON,stale) {
-  const agents=JSON.parse(agentsJSON).filter(a=>a.mapVisible!==false&&!(a.kind==='OpenCode'&&a.session==='server'));
-  guildSimulation.sync(agents,stale);
+  guildSimulation.sync(JSON.parse(agentsJSON),stale);
 }
 function guildWalk(x,z) {return guildSimulation.walk({x,z});}
 function guildTalk(key) {return guildSimulation.approach(key);}
@@ -46,6 +45,7 @@ function guildBenchmark(action) {
 }
 function guildActor(p) {
   return {key:p.key,name:p.player?'You':p.name,host:p.host||'local',kind:p.player?'Player':p.kind,
+    guildClass:p.guildClass||'Adventurer',height:p.height??2.10,
     status:p.status||'idle',activity:p.activity,x:p.x,z:p.z,yaw:p.yaw,moving:p.moving,
     parts:p.player?equippedPartKeys(p.loadout,poseFor(p)):undefined,
     dancePhase:p.player&&p.activity==='dance'?animationPhase(p,guildSimulation.time):undefined};

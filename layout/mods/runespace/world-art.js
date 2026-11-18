@@ -357,14 +357,24 @@ function limb(m,a,b,r1,r2,c,n=4){
 }
 function frontQuad(m,x,y,z,w,h,color){m.face([[x-w/2,y,z],[x+w/2,y,z],[x+w/2,y+h,z],[x-w/2,y+h,z]],color,false);}
 
+const NPC_CLASSES = {
+  Codex: {name:'Mage', height:2.40},
+  Claude: {name:'Ranger', height:2.04},
+  OpenCode: {name:'Warrior', height:2.02},
+  Hermes: {name:'Guildmaster', height:2.52},
+  Pi: {name:'Druid', height:2.15},
+  Adventurer: {name:'Adventurer', height:1.95},
+};
+export const NPC_KINDS = Object.freeze(Object.keys(NPC_CLASSES));
+const classByKind = new Map(NPC_KINDS.map(kind => [kind.toLowerCase(), NPC_CLASSES[kind]]));
+function npcClass(kind) {
+  return classByKind.get(String(kind || '').toLowerCase()) || NPC_CLASSES.Adventurer;
+}
 export function classFor(kind) {
-  switch (String(kind || '').toLowerCase()) {
-    case 'codex': return 'Mage';
-    case 'claude': return 'Ranger';
-    case 'opencode': return 'Warrior';
-    case 'hermes': return 'Guildmaster';
-    default: return 'Adventurer';
-  }
+  return npcClass(kind).name;
+}
+export function heightFor(kind) {
+  return npcClass(kind).height;
 }
 
 const LIVERIES = {
@@ -372,6 +382,7 @@ const LIVERIES = {
   Ranger: ['#4c713c', '#5e753a', '#447345'],
   Warrior: ['#889cad', '#9dabb2', '#81a0a4'],
   Guildmaster: ['#8f416e', '#8f416e', '#8f416e'],
+  Druid: ['#687951', '#737a4e', '#5b7354'],
   Adventurer: ['#ad8b51', '#ad8b51', '#ad8b51'],
 };
 
@@ -473,6 +484,42 @@ function guildmasterGear(mesh,bob) {
   mesh.face(pennon,velvet,false);mesh.face([...pennon].reverse(),velvet,false);
   frontQuad(mesh,-.20,2.08+bob,-.385,.065,.29,gold);
   frontQuad(mesh,-.20,2.24+bob,-.382,.23,.055,gold);
+}
+
+function druidGear(mesh, bob, robe, hand, stowed) {
+  const linen = '#d7cfac', brass = '#bca465', bark = '#805a38';
+  loft(mesh, ring(0,.36+bob,0,.32,.225,8), ring(0,1.00+bob,0,.235,.17,8), robe, false);
+  loft(mesh, ring(0,.93+bob,0,.25,.19,8), ring(0,1.00+bob,0,.25,.19,8), '#7b583b', false);
+  // Broad linen mantle with a pointed green scapular down the front.
+  loft(mesh, ring(0,1.20+bob,0,.385,.222,8), ring(0,1.46+bob,0,.188,.16,8), linen);
+  mesh.face([[-.09,1.30+bob,.215],[-.093,.54+bob,.222],[0,.46+bob,.231],
+    [.093,.54+bob,.222],[.09,1.30+bob,.215]], '#455a3f', false);
+  gem(mesh, 0, 1.22+bob, .218, .047, .075, brass);
+
+  // The hollow hood leaves the original face and skin visible from the front.
+  const rim = [[-.15,1.46],[.15,1.46],[.225,1.65],[.189,1.88],
+    [0,1.98],[-.189,1.88],[-.225,1.65]];
+  const outside = rim.map(([x,y]) => [x,y+bob,.14]);
+  const opening = rim.map(([x,y]) => [x*.72,1.67+(y-1.67)*.64+bob,.18]);
+  const back = rim.map(([x,y]) => [x*.79,1.69+(y-1.69)*.82+bob,-.20]);
+  for (let i=0;i<rim.length;i++) {
+    const j=(i+1)%rim.length;
+    mesh.face([outside[i],outside[j],opening[j],opening[i]], linen);
+    mesh.face([outside[j],outside[i],back[i],back[j]], linen);
+  }
+  mesh.face([...back].reverse(), linen);
+
+  // Sling the hazel crook diagonally behind the cape for travel and crafting.
+  const grip = stowed ? [-.18,1.04+bob,-.45] : hand;
+  const [x,y,z] = grip;
+  const foot = [x+(stowed?.39:.03),.18+bob,z-.018];
+  const neck = [x-(stowed?.31:.055),1.86+bob,z+.028];
+  limb(mesh, foot, grip, .030,.044,bark,5);
+  limb(mesh, grip, neck, .044,.036,bark,5);
+  const hook = [[0,0],[-.065,.15],[-.19,.17],[-.255,.095],[-.225,.015]]
+    .map(([dx,dy]) => [neck[0]+dx,neck[1]+dy,neck[2]]);
+  for (let i=1;i<hook.length;i++) limb(mesh, hook[i-1], hook[i], .036,.030,bark,5);
+  limb(mesh, [x,y+.04,z], [x-.009,y+.14,z+.004], .048,.043,brass,5);
 }
 
 // Seconds per complete movement, shared with the baked Metal poses.
@@ -1503,6 +1550,7 @@ export function buildCharacter(Mesh,hash,person,time){
   if(job==='Ranger')rangerGear(m,bob,rightHand,stowed);
   if(job==='Warrior')warriorGear(m,bob,rightHand,leftHand,stowed);
   if(job==='Guildmaster')guildmasterGear(m,bob);
+  if(job==='Druid')druidGear(m,bob,cloth,rightHand,stowed);
   if(pose){
     // Rotate the torso, head and stowed equipment together around the hips.
     for(const face of m.faces)figure.face(face.points.map(vertex=>leanPoint(vertex,bob,pose)),face.color,false);

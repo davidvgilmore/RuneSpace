@@ -1,6 +1,6 @@
 import { View, div, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { props, theme, shared, setShared, exec, checking, run, spaces, agents, machines, terminals, focused, window as appWindow, setWindowTitle, nextCommand, appHome, readTextFile, writeTextFile, layout } from "herdr";
+import { props, theme, shared, setShared, exec, checking, run, spaces, agents, machines, terminals, panes, focused, window as appWindow, setWindowTitle, nextCommand, appHome, readTextFile, writeTextFile, layout } from "herdr";
 import GuildWorld from "./world.js";
 import { GuildSoundtrack } from "./world-music.js";
 import GuildInventory from "./inventory.js";
@@ -9,7 +9,7 @@ import { rosterStatus } from "./roster-presence.js";
 
 import { nativeRoster } from "./native-roster.js";
 const STATUS = { working: "On a quest", blocked: "Needs you", idle: "At the bank", error: "Trouble", unknown: "Unknown", offline: "Offline" };
-const SIGIL = { Claude: "✦", Codex: "⌘", Hermes: "♜", OpenCode: "◇" };
+const SIGIL = { Claude: "✦", Codex: "⌘", Hermes: "♜", OpenCode: "◇", Pi: "❧" };
 function V() { return div().flex().flex_col().items_stretch().justify_start(); }
 function snapshot() { return shared("runespace.snapshot") || {agents:[],hosts:[]}; }
 function saveCamera(pose) {
@@ -87,7 +87,7 @@ export default class GuildHall extends View {
   }
   refresh(cx) {
     try {
-      const d=nativeRoster({agents:agents(), terminals:terminals(), spaces:spaces(), machines:machines()},snapshot());
+      const d=nativeRoster({agents:agents(), terminals:terminals(), spaces:spaces(), machines:machines(), panes:panes()},snapshot());
       setShared('runespace.snapshot',d);
       if(shared('runespace.error'))setShared('runespace.error','');
     } catch(error) {

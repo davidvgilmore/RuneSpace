@@ -34,11 +34,25 @@ The installer builds the world and places the mod, theme and layout in your Herd
 | Dance | G |
 | Music | M |
 
-Codex agents wear mage robes, Claude agents are rangers, and OpenCode agents are warriors. Working characters chop trees, mine ore, fish, work the forge, or rake an allotment. After 30 minutes idle they leave the map and appear offline in the friends list. RuneSpace reads the agents and machines already connected to your Herdr instance.
+Codex agents are mages, Claude agents are rangers, and Hermes is the guildmaster. OpenCode warriors carry a sword and kite shield. Pi druids wear moss-green robes and a linen hood. Both stow their gear to chop trees, mine ore, fish, work the forge, or rake an allotment. Idle agents gather at the commons. After 30 minutes idle they leave the map and appear offline in the friends list.
 
 Open **Inventory** to change any of seven equipment slots. The 29 cosmetics include all six partyhat colours, dragon chainbody, Bandos tassets, abyssal whip, Elysian spirit shield and fire cape. The two-handed Armadyl godsword takes both hands.
 
 The music panel has three original pieces, including *Lanterns at the Commons* and *Banners at Dawn*. Music carries on when you enter a conversation. The MIDI scores, recordings and rendering notes are included. [Songs of the Guild](layout/mods/runespace/music/README.md)
+
+## Connecting OpenCode and Pi
+
+Open the interactive harness in a Herdr terminal, or start one with `hc run --bg opencode` or `hc run --bg pi`. Click its character to open that same terminal. Remote agents use the machine connections you've already set up in Herdr.
+
+RuneSpace uses the harness's terminal status reports to tell when it is working. Pi 1.1 and newer and OpenCode builds with native program-status reporting work out of the box. An interactive harness without a report appears as **Unknown**. [Pi 1.1 release notes](https://github.com/earendil-works/pi/releases/tag/v1.1.0) · [OpenCode native reporting](https://github.com/anomalyco/opencode/pull/55172)
+
+For Pi 0.80.2 or OpenCode 2.0.25's full TUI, install the matching reporter **on the machine running the harness**, then open a new interactive session. You can pass either name on its own. OpenCode's `mini` interface doesn't load this plugin.
+
+```sh
+python3 scripts/install-harness-status.py pi opencode
+```
+
+The installer writes a `runespace-status` extension under Pi's agent directory and a plugin of the same name under OpenCode's configuration directory. Both activate inside Herdr terminals. To remove one, delete its `runespace-status` directory.
 
 ## License and credits
 

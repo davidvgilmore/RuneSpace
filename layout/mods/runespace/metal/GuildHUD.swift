@@ -1,17 +1,5 @@
 import Cocoa
 
-extension Actor {
-    var guildClass: String {
-        switch kind?.lowercased() {
-        case "codex": return "Mage"
-        case "claude": return "Ranger"
-        case "opencode": return "Warrior"
-        case "hermes": return "Guildmaster"
-        default: return "Adventurer"
-        }
-    }
-}
-
 // A north-up chart of the guild green. The same projection drives its markers and click targets.
 private enum Atlas {
     static let center = CGPoint(x: 68, y: 68)

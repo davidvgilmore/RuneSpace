@@ -13,7 +13,8 @@ struct Actor: Decodable {
     let dancePhase: Double?
     let parts: [String]?
     var elevation: Float { x > -18.8 && x < -13.3 && z > 1.9 && z < 4.1 ? 0.43 : 0 }
-    var height: Float { kind == "Hermes" ? 2.52 : kind == "Codex" ? 2.40 : 2.10 }
+    let guildClass: String
+    let height: Float
 }
 struct GuildFrame: Decodable {
     let player: Actor
@@ -367,9 +368,13 @@ final class GPUScene {
                 }
                 continue
             }
-            let prefix="\(kind):\(host):\(activity):"
-            let body=mesh(prefix+String(index)) ?? mesh("\(kind):local:\(activity):\(index)") ?? mesh("Adventurer:local:idle:0")
-            let next=clip.frames>1 ? mesh(prefix+String((index+1)%clip.frames)) : nil
+            func npcPose(_ frameIndex: Int) -> MeshBuffer? {
+                let pose = ":\(activity):\(frameIndex)"
+                return mesh("\(kind):\(host)" + pose) ?? mesh("\(kind):local" + pose)
+                    ?? mesh("Adventurer:\(host)" + pose) ?? mesh("Adventurer:local" + pose)
+            }
+            let body=npcPose(index)
+            let next=clip.frames>1 ? npcPose((index+1)%clip.frames) : nil
             draw(body,at:a.x,a.z,a.yaw,bridge,next:next,fraction:Float(phase-Double(index)))
         }
         let t=Float(frame.time)
