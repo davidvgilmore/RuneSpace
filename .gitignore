@@ -1,0 +1,8 @@
+.DS_Store
+__pycache__/
+*.pyc
+node_modules/
+layout/mods/runespace/metal/assets.json
+layout/mods/runespace/metal/engine.bundle.js
+layout/mods/runespace/gpui-kit.d.ts
+layout/mods/runespace/jsconfig.json

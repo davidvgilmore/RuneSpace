@@ -1,0 +1,10 @@
+{
+  "name": "runespace",
+  "private": true,
+  "type": "module",
+  "engines": {"node": ">=22"},
+  "scripts": {
+    "build": "node scripts/build-metal-assets.mjs",
+    "test": "node --test scripts/test-*.mjs"
+  }
+}

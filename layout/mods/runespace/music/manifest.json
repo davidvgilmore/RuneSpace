@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "title": "Songs of the Guild",
+  "credit": "Original compositions for RuneSpace.",
+  "tracks": [
+    {
+      "id": "lanterns",
+      "title": "Lanterns at the Commons",
+      "duration": 122.2,
+      "bpm": 72,
+      "mood": "Romantic \u00b7 flute, harp & warm strings",
+      "audio": "lanterns.m4a",
+      "midi": "lanterns.mid"
+    },
+    {
+      "id": "banners",
+      "title": "Banners at Dawn",
+      "duration": 126.64,
+      "bpm": 108,
+      "mood": "Epic \u00b7 horns, strings & bright harp",
+      "audio": "banners.m4a",
+      "midi": "banners.mid"
+    },
+    {
+      "id": "willow",
+      "title": "The Willow Road",
+      "duration": 122.2,
+      "bpm": 96,
+      "mood": "Pastoral \u00b7 flute, lute & dancing harp",
+      "audio": "willow.m4a",
+      "midi": "willow.mid"
+    }
+  ]
+}

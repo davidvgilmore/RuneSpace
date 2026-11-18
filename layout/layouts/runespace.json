@@ -1,0 +1,133 @@
+{
+  "id": "root",
+  "type": "column",
+  "titlebar": "none",
+  "traffic_lights": [
+    15,
+    31
+  ],
+  "theme": "runespace",
+  "ui_font": "Pixelated MS Sans Serif",
+  "font": "JetBrains Mono",
+  "font_size": 14,
+  "background": "canvas",
+  "resizable": false,
+  "preview": "layouts/runespace.svg",
+  "children": [
+    {
+      "id": "runespace-header",
+      "type": "block",
+      "size": {
+        "px": 80
+      },
+      "window_drag": true,
+      "content": {
+        "mod": "runespace",
+        "props": {
+          "role": "header"
+        }
+      }
+    },
+    {
+      "id": "body",
+      "type": "row",
+      "children": [
+        {
+          "id": "sidebar",
+          "type": "block",
+          "size": {
+            "px": 278
+          },
+          "min": 220,
+          "max": 400,
+          "content": {
+            "mod": "runespace",
+            "props": {
+              "role": "sidebar"
+            }
+          },
+          "border": {
+            "width": 2,
+            "color": "border"
+          }
+        },
+        {
+          "id": "main-stack",
+          "type": "stack",
+          "active": "ledger",
+          "children": [
+            {
+              "id": "ledger",
+              "type": "block",
+              "content": {
+                "mod": "runespace",
+                "props": {
+                  "role": "board"
+                }
+              }
+            },
+            {
+              "id": "terminals",
+              "type": "column",
+              "children": [
+                {
+                  "id": "tabs",
+                  "type": "block",
+                  "size": {
+                    "px": 42
+                  },
+                  "content": {
+                    "mod": "tabs"
+                  }
+                },
+                {
+                  "id": "main",
+                  "type": "block",
+                  "padding": 10,
+                  "content": {
+                    "tab": "active",
+                    "pane": {
+                      "gap": 8,
+                      "radius": 0,
+                      "background": "background",
+                      "lone": true,
+                      "border": {
+                        "width": 3,
+                        "color": "border"
+                      },
+                      "focus": {
+                        "width": 3,
+                        "color": "accent"
+                      },
+                      "header": {
+                        "content": {
+                          "mod": "pane"
+                        },
+                        "height": 28,
+                        "position": "top",
+                        "reveal": "always"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "runespace-footer",
+      "type": "block",
+      "size": {
+        "px": 30
+      },
+      "content": {
+        "mod": "runespace",
+        "props": {
+          "role": "footer"
+        }
+      }
+    }
+  ]
+}
