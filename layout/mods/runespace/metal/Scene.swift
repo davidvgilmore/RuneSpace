@@ -10,15 +10,60 @@ struct Actor: Decodable {
     let name, host, kind, activity, status: String?
     let x, z, yaw: Float
     let moving: Bool
-    let dancePhase: Double?
+    let hit: Int?
+    let posePhase: Double?
     let parts: [String]?
     var elevation: Float { x > -18.8 && x < -13.3 && z > 1.9 && z < 4.1 ? 0.43 : 0 }
     let guildClass: String
     let height: Float
 }
+struct AdventureEntity: Decodable {
+    let key, kind, name, activity: String
+    let x, z, yaw, height: Float
+    let hp, maxHp, hit: Int?
+    let posePhase: Double
+    var tree: Bool { kind == "oak" }
+    var visible: Bool { activity != "hidden" }
+    var pickHeight: Float { activity == "stump" ? 0.42 : height }
+    var radius: Float { tree ? (activity == "stump" ? 0.48 : 1.3) : kind == "rat" ? 0.76 : 0.48 }
+    var prompt: String {
+        if activity == "stump" { return "Oak stump" }
+        return tree ? "Chop " + name : "Attack " + name
+    }
+}
+
+enum WorldPick {
+    case agent(Actor)
+    case adventure(AdventureEntity)
+
+    var key: String {
+        switch self { case .agent(let a): return a.key; case .adventure(let a): return a.key }
+    }
+    var agent: Actor? { if case .agent(let a) = self { return a }; return nil }
+    var entity: AdventureEntity? { if case .adventure(let a) = self { return a }; return nil }
+}
+
+struct AdventureState: Decodable {
+    let entities: [AdventureEntity]
+    let targetKey, message: String?
+    let hp, maxHp, logs, woodXp, combatXp, revision: Int
+    var target: AdventureEntity? { entities.first { $0.key == targetKey } }
+    var totals: String { "Logs \(logs)  ·  Woodcutting \(woodXp) XP  ·  Combat \(combatXp) XP" }
+    func status(hover: AdventureEntity?) -> (title: String, detail: String)? {
+        let message = self.message ?? ""
+        if let foe = target, !foe.tree, foe.visible {
+            return (message.isEmpty ? foe.name : message, "You \(hp)/\(maxHp) HP  ·  \(foe.name) \(foe.hp ?? 0)/\(foe.maxHp ?? 0) HP")
+        }
+        if !message.isEmpty { return (message, totals) }
+        if let hover { return (hover.prompt, hover.activity == "stump" ? "The oak will grow back" : totals) }
+        return nil
+    }
+}
+
 struct GuildFrame: Decodable {
     let player: Actor
     let npcs: [Actor]
+    let adventure: AdventureState
     let arrived: String?
     let time: Double
 }
@@ -57,15 +102,56 @@ final class WorldEngine {
     private var functions = [String: JSValue]()
     private let decoder = JSONDecoder()
     private static let movementKeys: Set<String> = ["up", "down", "left", "right"]
-    init(bundle: URL, saved: [String: Any]) throws {
+    private let adventureURL: URL?
+    private var savedRevision: Int?
+    private var pendingRevision: Int?
+    private var savedAdventure: String?
+    private var saveRetry = 0.0
+    init(bundle: URL, saved: [String: Any], adventureURL: URL?) throws {
+        self.adventureURL = adventureURL
+        savedAdventure = try adventureURL.flatMap(Self.loadAdventure)
         context.exceptionHandler = { _, error in NSLog("Guild simulation: %@", error?.toString() ?? "error") }
         context.evaluateScript(try String(contentsOf: bundle, encoding: .utf8), withSourceURL: bundle)
-        for name in ["guildInit","guildSync","guildEquipment","guildFrame","guildWalk","guildTalk","guildDance","guildStop","guildBenchmark"] {
+        for name in ["guildInit","guildSync","guildEquipment","guildFrame","guildWalk","guildTalk","guildInteract","guildSaveAdventure","guildMergedAdventure","guildReconcileAdventure","guildDance","guildStop","guildBenchmark"] {
             guard let fn = context.objectForKeyedSubscript(name), fn.isObject else { throw problem("Missing simulation function " + name) }
             functions[name] = fn
         }
-        call("guildInit", [json(saved)])
+        call("guildInit", [json(saved), savedAdventure ?? "null"])
     }
+    private static func loadAdventure(_ url: URL) throws -> String? {
+        do { return try String(contentsOf: url, encoding: .utf8) }
+        catch let error as CocoaError where error.code == .fileReadNoSuchFile { return nil }
+    }
+
+    // Both native views and the classic Herdr view contend on this sidecar, so the
+    // lock stays valid when a successful save atomically replaces the JSON inode.
+    private func persistAdventure(_ url: URL, revision: Int, wait: Bool = false) throws -> Int {
+        let lock = open(url.deletingPathExtension().appendingPathExtension("lock").path, O_CREAT | O_RDWR, 0o600)
+        guard lock >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        defer { close(lock) }
+        guard flock(lock, wait ? LOCK_EX : LOCK_EX | LOCK_NB) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        let current = try Self.loadAdventure(url)
+        guard var value = call("guildSaveAdventure", [])?.toString() else { throw problem("No adventure save") }
+        let conflict = current != savedAdventure
+        if conflict {
+            guard let merged = call("guildMergedAdventure", [savedAdventure ?? "null", value, current ?? "null"])?.toString()
+            else { throw problem("Could not reconcile adventure progress") }
+            value = merged
+        }
+        try Data(value.utf8).write(to: url, options: .atomic)
+        savedAdventure = value
+        if conflict, let restored = call("guildReconcileAdventure", [value]) { return Int(restored.toInt32()) }
+        return revision
+    }
+
+    func flushAdventure() {
+        guard let adventureURL, let revision = pendingRevision else { return }
+        do {
+            savedRevision = try persistAdventure(adventureURL, revision: revision, wait: true)
+            pendingRevision = nil
+        } catch { NSLog("Could not save adventure on exit: %@", error.localizedDescription) }
+    }
+
     func sync(_ shared:[String:Any]) {
         call("guildEquipment",[json(shared["runespace.loadout"] as? [String:Any] ?? [:])])
         guard let snap=shared["runespace.snapshot"] as? [String:Any],let agents=snap["agents"] as? [[String:Any]] else{return}
@@ -75,10 +161,34 @@ final class WorldEngine {
     @discardableResult func call(_ name: String, _ args: [Any]) -> JSValue? {
         functions[name]?.call(withArguments: args)
     }
+    func interact(_ pick: WorldPick) {
+        switch pick {
+        case .agent(let agent): call("guildTalk", [agent.key])
+        case .adventure(let entity): call("guildInteract", [entity.key])
+        }
+    }
     func step(_ dt: Double, keys: Set<String>, yaw: Float) throws -> GuildFrame {
         let input = Dictionary(uniqueKeysWithValues: keys.intersection(Self.movementKeys).map { ($0,true) })
         guard let str = call("guildFrame",[dt,json(input),Double(yaw)])?.toString() else { throw problem("No world frame") }
-        return try decoder.decode(GuildFrame.self, from: Data(str.utf8))
+        let frame = try decoder.decode(GuildFrame.self, from: Data(str.utf8))
+        let revision = frame.adventure.revision
+        if savedRevision != revision, CACurrentMediaTime() >= saveRetry {
+            if let adventureURL, savedRevision != nil {
+                pendingRevision = revision
+                do {
+                    savedRevision = try persistAdventure(adventureURL, revision: revision)
+                    pendingRevision = nil
+                }
+                catch let error as POSIXError where error.code == .EAGAIN {
+                    // Keep movement responsive while the classic view is finishing a save.
+                    saveRetry = CACurrentMediaTime() + 0.05
+                } catch {
+                    NSLog("Could not save adventure: %@", error.localizedDescription)
+                    saveRetry = CACurrentMediaTime() + 1
+                }
+            } else { savedRevision = revision }
+        }
+        return frame
     }
 }
 
@@ -124,16 +234,19 @@ struct GPUCamera {
         let v = SIMD3(x-focus.x,y,z-focus.y)
         return CGPoint(x:size.width/2+CGFloat(simd_dot(v,right)*scale),y:size.height*0.52+CGFloat(simd_dot(v,down)*scale))
     }
-    func pick(_ point: CGPoint, from frame: GuildFrame?) -> Actor? {
-        guard let frame else {return nil}
-        let hits=frame.npcs.filter { actor in
-            let feet=screen(actor.x,actor.elevation,actor.z), head=screen(actor.x,actor.elevation+actor.height,actor.z)
-            let radius=max(5,CGFloat(scale)*0.47)
-            // At a steep pitch the character's depth occupies more of the screen than its height.
-            let depth=radius*CGFloat(sin(pitch))
-            return abs(point.x-feet.x)<radius && point.y>=head.y-max(2,depth) && point.y<=feet.y+max(3,depth)
+    func pick(_ point: CGPoint, from frame: GuildFrame?) -> WorldPick? {
+        guard let frame else { return nil }
+        func hits(_ x: Float, _ z: Float, _ elevation: Float, _ height: Float, _ width: Float) -> Bool {
+            let feet = screen(x,elevation,z), head = screen(x,elevation+height,z)
+            let radius = max(5,CGFloat(scale * width)), depth = radius*CGFloat(sin(pitch))
+            return abs(point.x-feet.x) < radius && point.y >= head.y-max(2,depth) && point.y <= feet.y+max(3,depth)
         }
-        return hits.max {screen($0.x,0,$0.z).y < screen($1.x,0,$1.z).y}
+        // Agents remain reachable when someone is working behind a tree or creature.
+        if let actor = frame.npcs.filter({ hits($0.x,$0.z,$0.elevation,$0.height,0.47) })
+            .max(by: { screen($0.x,0,$0.z).y < screen($1.x,0,$1.z).y }) { return .agent(actor) }
+        if let entity = frame.adventure.entities.filter({ $0.visible && hits($0.x,$0.z,0,$0.pickHeight,$0.radius) })
+            .max(by: { screen($0.x,0,$0.z).y < screen($1.x,0,$1.z).y }) { return .adventure(entity) }
+        return nil
     }
     func ground(_ point: CGPoint) -> SIMD2<Float> {
         let x = Float(point.x-size.width/2)/scale, s = Float(point.y-size.height*0.52)/scale/sin(pitch)
@@ -187,6 +300,11 @@ vertex Out guildVertex(device const Vertex* vertices [[buffer(0)]],constant Para
     float3 v=mix(float3(vertices[i].xyz),float3(next[i].xyz),p.options.x);
     float3 w=float3(p.model.x+v.x*p.model.z+v.z*p.model.w, v.y+p.origin.w,p.model.y-v.x*p.model.w+v.z*p.model.z);
     float3 r=w-p.origin.xyz; Out o; o.pos=float4(dot(r,p.right.xyz),dot(r,p.vertical.xyz)-0.04,dot(r,p.depth.xyz)*0.008+0.5,1);
+    if (p.options.y > 0.5) {
+        float3 center = float3(p.model.x, p.origin.w, p.model.y) - p.origin.xyz;
+        float2 projected = float2(dot(center,p.right.xyz),dot(center,p.vertical.xyz)-0.04);
+        o.pos = float4(projected + v.xy * float2(length(p.right.xyz),length(p.vertical.xyz)), v.z, 1);
+    }
     o.color=mix(float4(vertices[i].color),float4(next[i].color),p.options.x); return o;
 }
 fragment float4 guildFragment(Out p [[stage_in]]) {
@@ -279,6 +397,39 @@ final class GPUScene {
             }
             decals[key]=try buffer(verts.withUnsafeBufferPointer {Data(buffer:$0)})
         }
+        // Camera-facing life bars and damage splashes share the actor vertex format.
+        func quad(_ vertices: inout [Float], _ x:Float, _ y:Float, _ w:Float, _ h:Float, _ z:Float, _ color:[Float]) {
+            for (dx,dy) in [(Float(0),Float(0)),(w,0),(w,h),(0,0),(w,h),(0,h)] {
+                vertices += [x+dx,y+dy,z]+color
+            }
+        }
+        for fraction in 0...20 {
+            var vertices=[Float]()
+            quad(&vertices,-0.61,0,1.22,0.105,0.004,[0.16,0.10,0.08,1])
+            quad(&vertices,-0.57,0.02,1.14,0.065,0.003,[0.60,0.13,0.11,1])
+            quad(&vertices,-0.57,0.02,1.14*Float(fraction)/20,0.065,0.002,[0.37,0.81,0.23,1])
+            decals["life-\(fraction)"]=try buffer(vertices.withUnsafeBufferPointer{Data(buffer:$0)})
+        }
+        let digits=["010110010010111","111001111100111","111001111001111","101101111001001",
+                    "111100111001111","111100111101111","111001001001001","111101111101111","111101111001111"]
+        for (index, glyph) in digits.enumerated() {
+            var vertices=[Float]()
+            for (radius,z,color) in [(Float(0.43),Float(0.003),[Float](arrayLiteral:0.25,0.05,0.035,1)),
+                                     (0.37,0.002,[Float](arrayLiteral:0.75,0.12,0.09,1))] {
+                for i in 0..<16 {
+                    var points:[SIMD2<Float>]=[.zero]
+                    for j in i...i+1 {
+                        let angle=Float(j)*Float.pi/8, r=radius*(j%2==0 ? 1:0.73)
+                        points.append(SIMD2(cos(angle),sin(angle))*r)
+                    }
+                    for point in points {vertices += [point.x,point.y,z]+color}
+                }
+            }
+            for (i,bit) in glyph.enumerated() where bit == "1" {
+                quad(&vertices,Float(i%3)*0.072-0.108,0.108-Float(i/3)*0.072,0.074,0.074,0.001,[1,0.96,0.82,1])
+            }
+            decals["hit-\(index+1)"]=try buffer(vertices.withUnsafeBufferPointer{Data(buffer:$0)})
+        }
         self.decals=decals
         let lib=try gpu.makeLibrary(source:shaders,options:nil)
         let pipe=MTLRenderPipelineDescriptor()
@@ -337,6 +488,17 @@ final class GPUScene {
             encoder.drawPrimitives(type:.triangle,vertexStart:0,vertexCount:m.count)
         }
         draw(ground)
+        for entity in frame.adventure.entities where entity.visible {
+            let count = entity.tree ? 1 : 8
+            let phase = min(Double(1).nextDown,max(0,entity.posePhase)) * Double(count)
+            let index = Int(phase), prefix = "Adventure:\(entity.kind):\(entity.activity):"
+            if !entity.tree { draw(decals["shadow"],at:entity.x,entity.z,0,0.066) }
+            if entity.key == hovered || entity.key == frame.adventure.targetKey {
+                draw(decals["ring"],at:entity.x,entity.z,0,0.071)
+            }
+            draw(mesh(prefix+String(index)),at:entity.x,entity.z,entity.yaw,
+                 next:count > 1 ? mesh(prefix+String((index+1)%count)) : nil,fraction:Float(phase-Double(index)))
+        }
         var inView=0
         for a in frame.npcs+[frame.player] {
             let player = a.key==frame.player.key
@@ -353,8 +515,8 @@ final class GPUScene {
             let activity=a.moving ? "walk" : clips[job] != nil ? job : "idle"
             let clip=player && activity=="idle" ? playerIdle : (clips[activity] ?? clips["idle"]!)
             let normalized: Double
-            if player && activity == "dance", let dancePhase=a.dancePhase {
-                normalized=max(0,min(Double(1).nextDown,dancePhase))
+            if player, let posePhase=a.posePhase {
+                normalized=max(0,min(Double(1).nextDown,posePhase))
             } else {
                 normalized=(frame.time/clip.seconds+phaseOffset(for:a.key)).truncatingRemainder(dividingBy:1)
             }
@@ -379,6 +541,17 @@ final class GPUScene {
         }
         let t=Float(frame.time)
         for i in 0..<4 {let phase=t*1.5+Float(i)*1.7;draw(decals[i%2==0 ? "flame":"ember"],at:cos(phase)*0.18,3+sin(phase)*0.18,phase,0.24+sin(phase*3)*0.12)}
+        if let target=frame.adventure.target, !target.tree, target.visible {
+            params.options.y=1
+            func mark(_ x:Float,_ z:Float,_ height:Float,_ hp:Int,_ maximum:Int,_ hit:Int?) {
+                let life = max(0,min(20,Int(round(20*Float(hp)/Float(max(1,maximum))))))
+                draw(decals["life-\(life)"],at:x,z,0,height+0.21)
+                if let hit, hit > 0 {draw(decals["hit-\(min(hit,9))"],at:x,z,0,height*0.60)}
+            }
+            mark(target.x,target.z,target.height,target.hp ?? 0,target.maxHp ?? 1,target.hit)
+            mark(frame.player.x,frame.player.z,frame.player.height+frame.player.elevation,
+                 frame.adventure.hp,frame.adventure.maxHp,frame.player.hit)
+        }
         encoder.endEncoding()
         return inView
     }

@@ -1,6 +1,6 @@
 import {View, div, image} from 'gpui-kit';
 import {h_flex} from 'gpui-base';
-import {run, shared, setShared, theme} from 'herdr';
+import {appHome, checking, readTextFile, run, shared, setShared, theme} from 'herdr';
 import {EQUIPMENT_ITEMS, EQUIPMENT_SLOTS, equipItem, normalizeLoadout, previewLayers} from './equipment.js';
 
 const column=()=>div().flex().flex_col().items_stretch().justify_start();
@@ -26,6 +26,27 @@ export default class GuildInventory extends View {
     this.height=700;
     this.focus=cx.focus_handle();
     this.receipt='';
+    this.progress={logs:0,woodXp:0,combatXp:0};
+    if(!checking())cx.timer.every(400,cx=>{
+      if(shared('runespace.mode')!=='inventory'){this.packLoaded=false;return;}
+      this.loadPack(cx);
+    });
+  }
+  loadPack(cx){
+    if(this.packLoaded)return;
+    this.packLoaded=true;
+    cx.spawn(async cx=>{
+      try {
+        const raw=await readTextFile(appHome()+'/data/runespace-adventure.json');
+        const pack=raw&&JSON.parse(raw);
+        if(pack?.version===1){
+          for(const key of ['logs','woodXp','combatXp']){
+            this.progress[key]=Number.isSafeInteger(pack[key])&&pack[key]>=0?pack[key]:0;
+          }
+          cx.notify();
+        }
+      } catch(_){}
+    });
   }
   chooseSlot(id,cx){
     this.slot=id;
@@ -162,7 +183,10 @@ export default class GuildInventory extends View {
       .child(h_flex().h(45).px(11).items_center().bg(t.surface)
         .child(text('Worn equipment',small?17:20,t.accent).font_family('Georgia')))
       .child(h_flex().p(small?5:8).gap(small?5:8).items_stretch()
-        .child(this.paperDoll(loadout,artWidth)).child(slots));
+        .child(this.paperDoll(loadout,artWidth)).child(slots))
+      .child(column().px(11).py(8).gap(3).border_t(1).border_color(t.border)
+        .child(text('Oak logs  × '+this.progress.logs,14,t.foreground))
+        .child(text('Woodcutting '+this.progress.woodXp+' XP   ·   Combat '+this.progress.combatXp+' XP',12,t.muted)));
     const bankWidth=stacked?width:width-wearWidth-gap;
     const bank=this.collection(loadout,bankWidth,small,!stacked);
     const panes=stacked?column().gap(gap).child(wearing).child(bank):

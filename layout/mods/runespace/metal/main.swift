@@ -69,7 +69,8 @@ final class WorldWindow:NSObject,NSApplicationDelegate,NSWindowDelegate,MTKViewD
         if !bench,let cam=shared["runespace.worldCamera"] as? [String:Double]{
             camera.restore(cam)
         }
-        engine=try WorldEngine(bundle:assets.appendingPathComponent("engine.bundle.js"),saved:saved)
+        engine=try WorldEngine(bundle:assets.appendingPathComponent("engine.bundle.js"),saved:saved,
+                               adventureURL:bench ? nil : dataDir.appendingPathComponent("runespace-adventure.json"))
         refreshRoster(shared)
         updateCommands(shared,initial:true)
         expectedHerdrPID=NSRunningApplication.runningApplications(withBundleIdentifier:"dev.herdr.app").first?.processIdentifier
@@ -148,13 +149,13 @@ final class WorldWindow:NSObject,NSApplicationDelegate,NSWindowDelegate,MTKViewD
         func dist(_ a:Actor)->Float {hypot(a.x-f.player.x,a.z-f.player.z)}
         return f.npcs.filter{dist($0)<2.8}.min{dist($0)<dist($1)}
     }
-    func pick(_ point:CGPoint)->Actor? {
+    func pick(_ point:CGPoint)->WorldPick? {
         camera.pick(point,from:frame)
     }
     func hover(_ point:CGPoint){hoverPoint=point;hoverKey=pick(point)?.key}
     func click(_ point:CGPoint) {
         guard !bench else{return};window.makeFirstResponder(view)
-        if let a=pick(point){engine.call("guildTalk",[a.key])}
+        if let target=pick(point){engine.interact(target)}
         else {let p=camera.ground(point);engine.call("guildWalk",[Double(p.x),Double(p.y)])}
     }
     func windowDidResignKey(_ n:Notification){keys.removeAll()}
@@ -177,7 +178,7 @@ final class WorldWindow:NSObject,NSApplicationDelegate,NSWindowDelegate,MTKViewD
             if field.frame != rect {field.frame=rect}
         }
         let target=f.npcs.first{$0.key==hoverKey || (hoverKey==nil && $0.key==close)}
-        hud.update(frame:f,target:target,yaw:camera.yaw,names:names)
+        hud.update(frame:f,target:target,hover:f.adventure.entities.first { $0.visible && $0.key == hoverKey },yaw:camera.yaw,names:names)
     }
     func mtkView(_ view:MTKView,drawableSizeWillChange size:CGSize){camera.size=view.bounds.size}
     func draw(in sender:MTKView) {
@@ -250,6 +251,7 @@ final class WorldWindow:NSObject,NSApplicationDelegate,NSWindowDelegate,MTKViewD
     }
     func end(kind:String,agent:String?=nil){
         guard !exiting else{return};exiting=true;view?.isPaused=true
+        engine?.flushAdventure()
         sendEvent(kind:kind,agent:agent)
         if !bench {NSRunningApplication.runningApplications(withBundleIdentifier:"dev.herdr.app").first?.activate(options:[])}
         closeProcess()

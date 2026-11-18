@@ -493,6 +493,7 @@ def render_loop(binary, directory):
             held=focused_keys.sample(time.time()*1000,controls.action)
             request=controls.command;controls.command={}
             report=request.pop('report',False)
+            if report:request['inspect']=True
             music=request.pop('music',False)
             if controls.pointer:request['pointer']=[controls.pointer[0]*width,controls.pointer[1]*height]
             keys=list(held.union(controls.frame_keys()))
@@ -521,8 +522,8 @@ def render_loop(binary, directory):
             agents=frame.get('agents',[])
             selected=next((a for a in agents if a['key']==(frame.get('hovered') or frame.get('nearest'))),None)
             target=(selected.get('name') or selected['key']) if selected else ''
-            title=safe_title('THE GUILD GREEN   ·   '+(target or f'{len(agents)} companions'),cols-1)
-            footer=safe_title(FOOTER_BUTTONS+'   W/S tilt   A/D orbit   Arrows or click to walk   Scroll to zoom   Click companion to chat   N names   H commons',cols-1)
+            title=safe_title(frame.get('adventureStatus') or 'THE GUILD GREEN   ·   '+(target or f'{len(agents)} companions'),cols-1)
+            footer=safe_title(FOOTER_BUTTONS+'   Click oak to chop · creature to fight · agent to chat   Arrows or click to walk   W/S tilt   A/D orbit   Scroll to zoom',cols-1)
             hud=(CSI+b'1;1H'+CSI+b'2K'+CSI+b'1;33m'+title.encode()+CSI+b'0m'+f'\x1b[{rows};1H'.encode()+CSI+b'2K'+footer.encode())
             upload,placement=kitty_image(raw,w,h,cols,rows-2,index,compressor)
             output(upload+CSI+b'?2026h'+CSI+b'2;1H'+placement+(hud if hud!=last_hud else b'')+CSI+b'?2026l')
@@ -538,7 +539,7 @@ def render_loop(binary, directory):
             if report and not music:
                 player={'x':frame['x'],'z':frame['z'],'activity':frame.get('playerActivity','idle')}
                 if frame.get('dancePhase') is not None:player['dancePhase']=frame['dancePhase']
-                atomic_json(EVENT,dict(kind='report',id=int(time.time()*1000),report={**{k:frame[k] for k in ('yaw','pitch','zoom','width','height')},'player':player,'npcs':agents,'nearest':frame.get('nearest')}))
+                atomic_json(EVENT,dict(kind='report',id=int(time.time()*1000),report={**{k:frame[k] for k in ('yaw','pitch','zoom','width','height')},'player':player,'npcs':agents,'nearest':frame.get('nearest'),'adventure':frame.get('adventure')}))
             if bench:
                 bench.sent(frame,sent_time,len(upload))
             if finished:

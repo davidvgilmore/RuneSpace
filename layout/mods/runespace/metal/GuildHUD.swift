@@ -217,7 +217,7 @@ final class GuildHUD: NSView {
     private let chart: GuildMap
     private let back: StoneButton, names: StoneButton, commons: StoneButton, inventory: StoneButton, music: StoneButton
     private var helpButton: StoneButton!
-    private let hints = NSTextField(labelWithString: "Click or arrows to walk   ·   Click agent to talk   ·   W/S tilt   ·   A/D rotate   ·   Scroll zoom   ·   G dance")
+    private let hints = NSTextField(labelWithString: "Click or arrows to walk   ·   Click an agent, oak or creature   ·   W/S tilt   ·   A/D rotate   ·   Scroll zoom   ·   G dance")
     private var serviceKey: String?, statusCode: String?, activityCode: String?, lastTitle: String?
     private var lastCount = -1, lastWorking = -1
     init(in parent: NSView, onBack: @escaping () -> Void, onNames: @escaping () -> Void,
@@ -260,10 +260,19 @@ final class GuildHUD: NSView {
         for button in [back, names, commons, inventory, music, helpButton!] where button.frame.contains(local) { return button }
         return chart.containsGround(chart.convert(local,from:self)) ? chart : nil
     }
-    func update(frame: GuildFrame, target: Actor?, yaw: Float, names shown: Bool) {
+    func update(frame: GuildFrame, target: Actor?, hover: AdventureEntity?, yaw: Float, names shown: Bool) {
         names.marked = shown
         chart.update(frame,yaw)
-        if let actor = target {
+        if let status = frame.adventure.status(hover:hover), target == nil || frame.adventure.targetKey != nil || hover != nil {
+            // Invalidate the companion/count cache when leaving an interaction.
+            serviceKey = "adventure"
+            if plaque.title.stringValue != status.title || plaque.detail.stringValue != status.detail {
+                plaque.title.font = plaque.agentFont
+                plaque.title.stringValue = status.title
+                plaque.detail.stringValue = status.detail
+                plaque.toolTip = status.title + " · " + status.detail
+            }
+        } else if let actor = target {
             let title = actor.name ?? actor.key
             guard actor.key != serviceKey || lastTitle != title || statusCode != actor.status || activityCode != actor.activity else { return }
             serviceKey = actor.key; lastTitle = title; statusCode = actor.status; activityCode = actor.activity

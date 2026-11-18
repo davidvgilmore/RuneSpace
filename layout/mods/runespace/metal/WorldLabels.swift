@@ -17,8 +17,7 @@ final class WorldLabels {
     private var placed = [CGRect]()
     init() { cache.countLimit = 256 }
 
-    private func bitmap(_ actor: Actor, highlighted: Bool) -> Bitmap? {
-        let name = (highlighted ? actor.guildClass + " · " : "") + (actor.name ?? actor.key)
+    private func bitmap(_ name: String, highlighted: Bool) -> Bitmap? {
         let key = ((highlighted ? "1" : "0") + name) as NSString
         if let entry = cache.object(forKey:key) { return entry }
         let limit: CGFloat = highlighted ? 177 : 118
@@ -51,7 +50,7 @@ final class WorldLabels {
         return result
     }
 
-    func draw(frame: GuildFrame, camera: GPUCamera, target: Actor?, names: Bool, into pixels: UnsafeMutableRawPointer, width: Int, height: Int, hudScale: CGFloat = 1) {
+    func draw(frame: GuildFrame, camera: GPUCamera, target: WorldPick?, names: Bool, into pixels: UnsafeMutableRawPointer, width: Int, height: Int, hudScale: CGFloat = 1) {
         guard names || target != nil else { return }
         let scale = max(0.25,min(8,hudScale))
         if scale != rasterScale {
@@ -60,10 +59,18 @@ final class WorldLabels {
         }
         let gap = max(1,Int(rasterScale.rounded()))
         placed.removeAll(keepingCapacity:true)
-        func paint(_ actor: Actor, highlighted: Bool) {
-            let anchor = camera.screen(actor.x,actor.elevation+actor.height,actor.z)
+        func paint(_ pick: WorldPick, highlighted: Bool) {
+            let name: String, anchor: CGPoint
+            switch pick {
+            case .agent(let actor):
+                name = (highlighted ? actor.guildClass + " · " : "") + (actor.name ?? actor.key)
+                anchor = camera.screen(actor.x,actor.elevation+actor.height,actor.z)
+            case .adventure(let entity):
+                name = highlighted ? entity.prompt : entity.name
+                anchor = camera.screen(entity.x,entity.pickHeight,entity.z)
+            }
             guard anchor.x >= 0, anchor.x <= CGFloat(width), anchor.y >= 0, anchor.y <= CGFloat(height),
-                  let text = bitmap(actor,highlighted:highlighted), text.width <= width, text.height <= height else { return }
+                  let text = bitmap(name,highlighted:highlighted), text.width <= width, text.height <= height else { return }
             let x = max(0,min(width-text.width,Int(anchor.x.rounded())-text.width/2))
             let natural = min(height-text.height,max(0,Int(anchor.y.rounded())-text.height-gap))
             // Pack crowded labels into nearby columns. A short leader ties moved
@@ -104,7 +111,7 @@ final class WorldLabels {
         }
         if let target { paint(target,highlighted:true) }
         if names {
-            for actor in frame.npcs where actor.key != target?.key { paint(actor,highlighted:false) }
+            for actor in frame.npcs where actor.key != target?.key { paint(.agent(actor),highlighted:false) }
         }
     }
 }

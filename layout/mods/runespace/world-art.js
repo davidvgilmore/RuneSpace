@@ -357,6 +357,142 @@ function limb(m,a,b,r1,r2,c,n=4){
 }
 function frontQuad(m,x,y,z,w,h,color){m.face([[x-w/2,y,z],[x+w/2,y,z],[x+w/2,y+h,z],[x-w/2,y+h,z]],color,false);}
 
+function harvestOak(m, stump) {
+  const bark='#705135', barkLight='#8f6942', base=ring(0,.012,0,.45,.39,8,.15);
+  const cut=ring(.025,.46,.01,.27,.25,8,.15);
+  shadow(m,.14,.09,stump?.65:1.42,stump?.50:1.13,-.28);
+  loft(m,base,cut,bark,false);
+  for(let i=0;i<5;i++){
+    const a=i*TAU/5+.45;
+    limb(m,[.20*Math.sin(a),.24,.20*Math.cos(a)],
+      [.65*Math.sin(a),.055,.65*Math.cos(a)],.13,.025,bark,5);
+  }
+  if(stump) {
+    m.face([...cut].reverse(),'#dbb778',false);
+    const heart=ring(.03,.468,.01,.16,.145,8,.15);
+    m.face([...heart].reverse(),'#bb8a52',false);
+    m.face(ring(.03,.471,.01,.107,.093,8,.15).reverse(),'#d9ab6d',false);
+    m.face([[-.24,.477,.058],[-.106,.477,.04],[-.23,.477,.074]],'#684c35',false);
+    return;
+  }
+  const fork=ring(-.04,1.32,.012,.24,.22,8,.15);
+  loft(m,cut,fork,barkLight,false);
+  limb(m,[-.04,1.20,.012],[-.60,2.02,.19],.24,.12,bark,6);
+  limb(m,[-.04,1.28,.012],[.57,2.22,-.13],.22,.10,barkLight,6);
+  limb(m,[.03,1.54,.01],[.035,2.55,.14],.17,.08,bark,6);
+  // Low, spreading boughs distinguish these oaks from the pines across the river.
+  blob(m,-.62,1.68,.18,.83,1.09,.73,'#557239',1,7,true);
+  blob(m,.64,1.87,-.15,.84,1.07,.75,'#71823b',4,7,true);
+  blob(m,.06,1.86,-.60,1.02,1.06,.76,'#58733c',3,7,true);
+  blob(m,-.13,2.12,.14,1.06,1.24,.91,'#829147',2,8,true);
+  blob(m,.21,1.97,.67,.72,.79,.54,'#718849',5,6,true);
+}
+
+function goblin(m, activity, phase) {
+  const attacking=activity==='attack';
+  const [reach,lift] = attacking ? tweenFrames([
+    [0,0,0],[.25,-.22,.56],[.375,-.28,.68],[.5,.63,-.15],[.66,.52,-.16],[.86,.09,0],
+  ],phase) : [0,0];
+  const breath=Math.cos(TAU*phase)*.019;
+  const lean=.035+reach*.20, hip=.61+breath, cheek=lean+.12;
+  const skin='#799143', skinLight='#94a653', leather='#745238', iron='#737b6e';
+  for(const s of [-1,1]){
+    const knee=[s*.23,.31,.16+s*.05], foot=[s*.22,.11,.02+s*.085];
+    limb(m,[s*.13,hip,.01],knee,.128,.095,leather,5);
+    limb(m,knee,foot,.088,.056,skin,5);
+    loft(m,ring(foot[0],.025,foot[2]+.095,.102,.165,6),ring(foot[0],.123,foot[2],.076,.087,6),'#594637');
+  }
+  loft(m,ring(0,hip,0,.22,.16),ring(0,1.12+breath,lean,.32,.185),'#855940');
+  loft(m,ring(0,hip-.07,0,.24,.17),ring(0,hip+.085,.015,.205,.16),'#644a37');
+  frontQuad(m,.018,hip+.028,.174,.089,.057,'#ceab5d');
+  const neck=1.08+breath, jaw=ring(0,neck+.09,cheek,.185,.13,7);
+  const brow=ring(0,neck+.28,cheek-.025,.237,.174,7);
+  loft(m,jaw,brow,skin,false);loft(m,brow,ring(0,neck+.47,cheek-.047,.142,.11,7),skinLight);
+  for(const s of [-1,1]){
+    // An ear has a pale inner triangle and a folded dark back.
+    const lower=[s*.16,neck+.20,cheek+.016], top=[s*.19,neck+.35,cheek-.02];
+    const tip=[s*.45,neck+.42,cheek-.10], ridge=[s*.244,neck+.275,cheek+.02];
+    m.face([top,lower,tip],skin);
+    m.face([lower,ridge,tip],'#998454',false);m.face([ridge,top,tip],skinLight,false);
+    const eyeX=s*.105;
+    frontQuad(m,eyeX,neck+.255,cheek+.129,.060,.039,'#e7c66c');
+    frontQuad(m,eyeX+s*.005,neck+.255,cheek+.132,.019,.032,'#382f24');
+    limb(m,[s*.051,neck+.285,cheek+.141],[s*.167,neck+.316,cheek+.112],.031,.019,skin,4);
+    const tusk=[s*.104,neck+.123,cheek+.13];
+    limb(m,tusk,[s*.121,neck+.194,cheek+.153],.025,.003,'#e6d6b1',4);
+    const shoulder=[s*.269,1.087+breath,lean], elbow=[s*.39,.86+breath,lean+.055];
+    const hand=s<0?[-.34,.85+lift+breath,lean+.19+reach]:[.35,.90+breath,lean+.24];
+    if(s<0){elbow[1]+=lift*.58;elbow[2]+=reach*.39;}
+    limb(m,shoulder,elbow,.114,.078,skin,5);limb(m,elbow,hand,.082,.055,skinLight,5);
+    if(s<0){
+      const head=[hand[0]-.10,hand[1]+.27+lift*.20,hand[2]+.27+reach*.20-lift*.69];
+      limb(m,hand,head,.048,.074,'#77502f',6);
+      limb(m,head,[head[0]-.036,head[1]+.115,head[2]+.075],.105,.088,'#936740',6);
+    }else{
+      const [x,y,z]=hand;
+      const rim=ring(0,0,0,.177,.196,7).map(([a,,b])=>[x+a,y+b,z+.054]);
+      for(let i=0;i<rim.length;i++)m.face([rim[i],rim[(i+1)%rim.length],[x,y,z+.110]],iron,false);
+      m.box(x,y-.042,z+.10,.073,.084,.042,'#a6a58c');
+    }
+  }
+  const nose=[0,neck+.214,cheek+.244];
+  m.face([[-.070,neck+.247,cheek+.142],[.070,neck+.247,cheek+.142],nose],skinLight,false);
+  m.face([[.070,neck+.247,cheek+.142],[0,neck+.171,cheek+.146],nose],skin,false);
+}
+
+function giantRat(m, activity, phase) {
+  const stroke=activity==='attack' ? tweenFrames([
+    [0,0],[.25,-.10],[.5,.34],[.65,.24],[.875,0],
+  ],phase)[0] : 0;
+  const pulse=Math.sin(phase*TAU),lift=.024*pulse+Math.max(0,stroke)*.39;
+  const muzzle=.57+stroke;
+  const fur='#79624f', back='#665447', pale='#a58a68', skin='#ad816d';
+  // The rump stays low while the shoulders and jaw spring forward together.
+  blob(m,0,.15,-.22,.32,.50,.42,back,1,8,true);
+  blob(m,0,.19+lift,.13+stroke*.49,.26,.44,.37,fur,3,7,true);
+  for(const s of [-1,1]){
+    for(const fore of [false,true]){
+      const z=fore?.25+stroke*.58:-.33, x=s*(fore?.175:.215);
+      const paw=[x*1.24,.066,z+.060+(fore?stroke*.53:0)];
+      const h=fore?.37+lift:.39;
+      limb(m,[x,h,z],[x*1.24,.18,z-.075],fore?.068:.101,.061,fur,5);
+      limb(m,[x*1.24,.18,z-.075],paw,.053,.035,skin,5);
+      loft(m,ring(paw[0],.03,paw[2]+.026,.055,.098,5),ring(paw[0],.083,paw[2],.035,.053,5),skin);
+    }
+  }
+  const jaw=.36+lift, eye=.568+lift;
+  blob(m,0,jaw,muzzle-.13,.202,.277,.245,fur,1,7,true);
+  const cheek=[0,jaw+.08,muzzle-.045], snout=[0,jaw+.076,muzzle+.218];
+  limb(m,cheek,snout,.122,.048,pale,6);
+  blob(m,0,jaw+.046,muzzle+.203,.055,.066,.045,'#6c4a42',0,5,true);
+  for(const s of [-1,1]){
+    const x=s*.161,z=muzzle-.224;
+    blob(m,x,eye-.006,z,.076,.171,.054,back,0,6,true);
+    blob(m,x,eye+.011,z+.031,.055,.121,.035,skin,0,6,true);
+    blob(m,s*.132,eye-.089,muzzle+.008,.039,.072,.044,'#312a28',0,5,true);
+    for(const n of [-1,1]){
+      const whisker=[s*.083,jaw+.09,muzzle+.13];
+      limb(m,whisker,[s*.232,jaw+.089+n*.033,muzzle+.12+n*.058],.008,.002,'#c6b38e',3);
+    }
+  }
+  let tail=[0,.226,-.53];
+  for(let i=1;i<=7;i++){
+    const t=i/7,wave=Math.sin(phase*TAU-t*2.8);
+    const next=[t*(.20+.24*wave),.10+.13*t*t+.03*t*pulse,-.54-.68*t];
+    limb(m,tail,next,.060-.007*(i-1),.060-.007*i,i%2?'#9c7769':'#b18877',5);
+    tail=next;
+  }
+}
+
+export function buildAdventureModel(Mesh, kind, activity, phase=0) {
+  const mesh=new Mesh();
+  if(activity==='hidden')return mesh;
+  if(kind==='oak')harvestOak(mesh,activity==='stump');
+  else if(kind==='goblin')goblin(mesh,activity,phase);
+  else if(kind==='rat')giantRat(mesh,activity,phase);
+  return mesh;
+}
+
 const NPC_CLASSES = {
   Codex: {name:'Mage', height:2.40},
   Claude: {name:'Ranger', height:2.04},
@@ -1295,7 +1431,7 @@ function spiritShield(m,hand,divine=false){
     sheet(sigil[i],i%3?'#b8bcc2':'#d5d0ce','#90a5aa',.012);
 }
 
-function abyssalWhip(m,hand,phase,motion){
+function abyssalWhip(m,hand,phase,motion,strike=0){
   // A short oxblood grip feeds an almost vertical, alternating dark lash.
   // The carried silhouette has a small forked hook just above the ground.
   const point=(x,y,z)=>[hand[0]-x,hand[1]+y,hand[2]+z];
@@ -1306,7 +1442,10 @@ function abyssalWhip(m,hand,phase,motion){
   const lift=Math.min(1,Math.max(.20,(hand[1]-.11)/.80));
   const at=(x,y,z,t)=>{
     const lag=motion*t*Math.sin(TAU*phase-t*2.75);
-    return point(x+.070*lag,y*lift,z+.12*lag);
+    const extension=strike*t;
+    return point(x+.070*lag-extension*.12,
+                 y*lift+extension*(.67-.34*t),
+                 z+.12*lag+extension*.73);
   };
   const joints=curve.map(([x,y,z],i)=>at(x,y,z,i/(curve.length-1)));
   for(let i=1;i<joints.length;i++){
@@ -1357,9 +1496,9 @@ function metalRibbon(m,at,spine,front,back,depth=.025){
   }
 }
 function playerWeapon(m,rig,phase,motion,item){
-  if(item==='abyssal-whip'){abyssalWhip(m,rig.right,phase,motion);return;}
+  if(item==='abyssal-whip'){abyssalWhip(m,rig.right,phase,motion,rig.strike);return;}
   if(item==='dragon-scimitar'){
-    const at=swordFrame(rig.right,[-.38,.83,.40]);
+    const at=swordFrame(rig.right,rig.aim||[-.38,.83,.40]);
     limb(m,at(-.02,-.15,-.02),at(0,.10),.028,.034,'#57505a',6);
     metalRibbon(m,at,[[-.132,.062,.007],[-.123,.110,.018],[-.060,.130,.024],[.010,.107,.032],[.075,.085,.026],[.124,.098,.018],[.130,.13,.005]],'#777077','#48424b');
     metalRibbon(m,at,[[-.035,-.175,.027],[.031,-.166,.027],[.036,-.14,.008]],'#716970','#4e4951');
@@ -1456,6 +1595,35 @@ function playerShield(m,rig,item){
   forgedBlade(m,at,[[-.102,-.032,0,.033,.013],[-.071,-.051,0,.050,.019],[0,-.022,0,.023,.014]],'#55778b','#3b576c');
 }
 
+function actionStance(rig){
+  rig.legs=[-1,1].map(side=>({
+    hip:[side*.135,.87,0],knee:[side*.175,.44,.093-side*.095],
+    ankle:[side*.194,.14,-side*.132],yaw:side*.13,
+  }));
+}
+
+function setAttackPose(rig,phase,twoHanded) {
+  // Wind up beside the shoulder, lash forward on the beat, then draw back on guard.
+  const [x,y,z,ax,ay,az,strike]=tweenFrames([
+    [0,-.295,1.064,.21,-.37,.80,.44,0],
+    [.25,-.39,1.35,.025,-.64,.69,-.39,.06],
+    [1/3,-.40,1.38,-.045,-.58,.69,-.53,.10],
+    [.5,-.146,1.06,.54,.31,-.21,.93,1],
+    [2/3,-.12,1.01,.50,.42,-.32,.85,.77],
+    [5/6,-.27,1.02,.31,-.28,.39,.87,.16],
+  ],phase);
+  actionStance(rig);
+  rig.aim=[ax,ay,az];
+  rig.strike=strike;
+  rig.right=[x,y,z];
+  if(twoHanded){
+    rig.right[0]+=.13;
+    rig.left=along(rig.right,rig.aim,-.176);
+  }else{
+    rig.left=[.31,1.07+strike*.07,.265-strike*.038];
+  }
+}
+
 function playerFigure(Mesh,seed,person,phase){
   const moving=!!person.moving,dancing=!moving&&person.activity==='dance';
   const swing=moving?Math.sin(TAU*phase)*.25:0;
@@ -1469,7 +1637,16 @@ function playerFigure(Mesh,seed,person,phase){
   const gear=normalizeLoadout(person.loadout),part=person.equipmentPart;
   const includes=slot=>part===undefined||part===slot;
   rig.dancing=dancing;
-  if(!dancing&&gear.weapon==='armadyl-godsword'){
+  const chopping=!moving&&person.activity==='wood';
+  const attacking=!moving&&person.activity==='attack';
+  const toolPose=chopping?workPoseAt('wood',phase):null;
+  if(toolPose){
+    actionStance(rig);
+    rig.right=toolPose.left;
+    rig.left=toolPose.right;
+  }else if(attacking){
+    setAttackPose(rig,phase,gear.weapon==='armadyl-godsword');
+  }else if(!dancing&&gear.weapon==='armadyl-godsword'){
     rig.right=rig.torso([-.055,1.09,.24]);
     rig.left=rig.torso([-.097,.925,.219]);
   }
@@ -1492,8 +1669,11 @@ function playerFigure(Mesh,seed,person,phase){
     const elbow=rig.elbows?rig.elbows[side<0?0:1]:equippedElbow(shoulder,hand,side);
     playerArm(m,shoulder,elbow,hand,side,skin,gear.torso);
   }
-  if(includes('weapon'))playerWeapon(m,rig,phase,dancing?1:moving?.7:0,gear.weapon);
-  if(includes('shield'))playerShield(m,rig,gear.shield);
+  if(includes('weapon')){
+    if(toolPose)craftTools(m,toolPose);
+    else playerWeapon(m,rig,phase,dancing?1:moving?.7:0,gear.weapon);
+  }
+  if(includes('shield')&&!chopping)playerShield(m,rig,gear.shield);
   return m;
 }
 

@@ -38,6 +38,8 @@ The installer builds the world and places the mod, theme and layout in your Herd
 | Action | Control |
 | --- | --- |
 | Walk | Click the ground or use the arrow keys |
+| Chop wood or start a battle | Click a harvestable oak, goblin, or giant rat near the commons |
+| Stop chopping or retreat | Click open ground, move with the arrow keys, or press Esc |
 | Orbit and tilt the camera | A / D to orbit, W / S to tilt |
 | Zoom | Scroll wheel |
 | Talk to an agent | Click their character, or press Enter near them |
@@ -46,6 +48,10 @@ The installer builds the world and places the mod, theme and layout in your Herd
 | Music | M |
 
 Codex agents are mages, Claude agents are rangers, and Hermes is the guildmaster. OpenCode warriors carry a sword and kite shield. Pi druids wear moss-green robes and a linen hood. Both stow their gear to chop trees, mine ore, fish, work the forge, or rake an allotment. Idle agents gather at the commons. After 30 minutes idle they leave the map and appear offline in the friends list.
+
+Two oaks grow south of the campfire, near the market. Click one and your character walks to the trunk, draws an axe and chops until the tree becomes a stump. You earn one oak log and 25 Woodcutting XP. The oak grows back after 20 seconds.
+
+Across the lane, a goblin and a giant rat make for short, optional fights. Click either creature to engage with your equipped weapon. Hits appear over the characters, and you can walk away at any time. A win earns Combat XP. If your hitpoints run out, you recover at the commons with your equipment and logs. Press **I** to see your logs and XP alongside your equipment.
 
 Open **Inventory** to change any of seven equipment slots. The 29 cosmetics include all six partyhat colours, dragon chainbody, Bandos tassets, abyssal whip, Elysian spirit shield and fire cape. The two-handed Armadyl godsword takes both hands.
 

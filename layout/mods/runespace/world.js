@@ -1,9 +1,10 @@
 import {View,div,PathBuilder} from 'gpui-kit';
 import {h_flex} from 'gpui-base';
-import {shared,setShared,checking,run,exec,appHome} from 'herdr';
-import {Simulation,Camera,Mesh,character,ACTIVITY,HOST_COLOR,clipFor,poseFor,animationPhase,clamp,clampPitch,DEFAULT_PITCH,distance,TAU} from './world-engine.js';
+import {shared,setShared,checking,run,exec,appHome,readTextFile} from 'herdr';
+import {Simulation,Camera,Mesh,character,ACTIVITY,HOST_COLOR,clipFor,poseFor,animationPhase,clamp,clampPitch,DEFAULT_PITCH,distance,TAU,mergeAdventureProgress} from './world-engine.js';
 import {packFaces,sameFaces} from './world-packing.js';
 import {normalizeLoadout} from './equipment.js';
+import {buildAdventureModel} from './world-art.js';
 
 const V=()=>div().flex().flex_col().items_stretch().justify_start();
 const text=(s,size=13,c='#e9dfbf')=>div().text_size(size).text_color(c).child(s);
@@ -11,6 +12,7 @@ const button=(id,s,fn,active=false)=>h_flex().id(id).h(29).px(10).items_center()
 const panel=()=>V().bg('#272a21ee').border(2).border_color('#817656').p(12).gap(5);
 const statusColor=s=>s==='working'?'#bdd48c':s==='blocked'||s==='error'?'#f3b36e':s==='unknown'?'#aaaa95':'#ddc680';
 const elevationOf=p=>p.x>-18.8&&p.x<-13.3&&p.z>1.9&&p.z<4.1?.43:0;
+const adventureAction=p=>p.activity==='stump'?'Oak stump':(p.kind==='oak'?'Chop down ':'Attack ')+p.name;
 
 // Each retained layer has a bounded render. Native geometry is immutable and reusable;
 // element descriptions are rebuilt for every pass, as GPUI requires.
@@ -39,6 +41,9 @@ export default class GuildWorld extends View {
     this.follow={x:0,z:2};this.camera=new Camera(this.width,this.height,this.follow,this.yaw,this.zoom,this.pitch);this.meshCamera=new Camera(this.width,this.height,{x:0,z:0},this.yaw,this.zoom,this.pitch);
     this.projected=[];this.drag=null;this.renderTime=0;
     this.poses=new Map();this.actors=new Map();this.groundActors=new Map();this.staticProjection=null;this.staticCamera='';
+    this.adventureMeshes=new Map();
+    this.adventurePath=appHome()+'/data/runespace-adventure.json';
+    this.visit=0;
     this.scene=++sceneId;scenes.set(this.scene,new Map());this.layers=[];this.bandCache=new Map();this.bandLayers=new Map();
     const saved=shared('runespace.worldPosition');if(saved&&!this.sim.blocked(saved.x,saved.z)){this.sim.player.x=saved.x;this.sim.player.z=saved.z;}
     this.follow={x:this.sim.player.x*.60,z:this.sim.player.z*.45-3};
@@ -55,14 +60,61 @@ export default class GuildWorld extends View {
     if(camera?.yaw!==this.yaw||camera?.zoom!==this.zoom||camera?.pitch!==this.pitch)
       setShared('runespace.worldCamera',{yaw:this.yaw,zoom:this.zoom,pitch:this.pitch});
   }
+  loadAdventure(cx) {
+    if(this.adventureIO)return;
+    this.adventureIO=true;
+    const visit=this.visit;
+    cx.spawn(async cx=>{
+      try {
+        const raw=await readTextFile(this.adventurePath);
+        if(visit!==this.visit||shared('runespace.mode')!=='world')return;
+        this.adventureFile=raw??null;
+        this.sim.restoreAdventure(raw?JSON.parse(raw):null);
+        this.savedRevision=this.sim.adventure.revision;
+        this.progressReady=true;
+      } catch(_) {
+        this.hint='Could not load adventure progress.';
+        this.retryAt=Date.now()+2000;
+      } finally {this.adventureIO=false;cx.notify();}
+    });
+  }
+  saveAdventure(cx) {
+    if(!this.progressReady||this.adventureIO||this.sim.adventure.revision===this.savedRevision||Date.now()<(this.retryAt||0))return;
+    this.adventureIO=true;
+    cx.spawn(async ()=>{
+      try {
+        const home=appHome(),script=home+'/mods/runespace/play/adventure_store.py';
+        for(let attempt=0;attempt<4&&this.sim.adventure.revision!==this.savedRevision;attempt++){
+          const revision=this.sim.adventure.revision;
+          const value=JSON.stringify(this.sim.saveAdventure());
+          const request=JSON.stringify({expected:this.adventureFile,value});
+          const result=await exec('/usr/bin/python3',[script,home,request],{timeout:2500});
+          if(result.code!==0)throw Error('Adventure save failed');
+          const reply=JSON.parse(result.stdout);
+          if(reply.ok){
+            this.adventureFile=value;this.savedRevision=revision;
+          }else{
+            const base=JSON.parse(this.adventureFile),current=JSON.parse(reply.current);
+            const merged=mergeAdventureProgress(base,this.sim.saveAdventure(),current);
+            this.sim.reconcileAdventure(merged);
+            this.adventureFile=reply.current;
+          }
+        }
+      } catch(_) {
+        this.hint='Retrying adventure save…';this.retryAt=Date.now()+1000;
+      } finally {this.adventureIO=false;}
+    });
+  }
   tick(cx){
     const now=Date.now(),dt=Math.min(.1,(now-this.last)/1000);this.last=now;
     if(shared('runespace.mode')!=='world'){
-      if(this.entered){this.saveCamera();this.sim.stopDance();}
+      if(this.entered){this.saveCamera();this.sim.stopDance();this.sim.cancelAdventure();this.visit++;}
+      this.saveAdventure(cx);
       this.keys={};this.drag=null;this.entered=false;return;
     }
     if(!this.entered){
       this.entered=true;this.focus.focus();
+      this.progressReady=false;this.retryAt=0;
       this.sim.player.loadout=normalizeLoadout(shared('runespace.loadout'));
       this.gearKey=Object.values(this.sim.player.loadout).join('/');
       const saved=shared('runespace.worldPosition');
@@ -70,6 +122,7 @@ export default class GuildWorld extends View {
       this.restoreCamera();
       this.follow={x:this.sim.player.x*.60,z:this.sim.player.z*.45-3};
     }
+    if(!this.progressReady&&now>=(this.retryAt||0))this.loadAdventure(cx);
     if(!this.focus.is_focused())this.keys={};
     const snap=shared('runespace.snapshot')||{agents:[]},stale=!snap.at||now/1000-snap.at>35;
     this.sim.sync(snap.agents,stale);
@@ -85,6 +138,7 @@ export default class GuildWorld extends View {
       if(command.kind==='inventory'){this.openInventory();return;}
       if(command.kind==='walk')this.walk({x:command.x,z:command.z});
       if(command.kind==='talk')this.talk(command.key);
+      if(command.kind==='interact')this.interact(command.key);
       if(command.kind==='orbit')this.yaw+=command.delta;
       if(command.kind==='tilt')this.pitch=clampPitch(this.pitch+command.delta);
       if(command.kind==='home')this.home();
@@ -95,6 +149,7 @@ export default class GuildWorld extends View {
     this.yaw+=((keys.d||keys.e?1:0)-(keys.a||keys.q?1:0))*dt*.9;
     this.pitch=clampPitch(this.pitch+((keys.w||keys.r?1:0)-(keys.s||keys.f?1:0))*dt*.85);
     this.sim.step(dt,this.keys,this.yaw);
+    this.saveAdventure(cx);
     if(now-(this.lastSave||0)>2500){
       const saved=shared('runespace.worldPosition');this.lastSave=now;
       if(!saved||Math.abs(saved.x-this.sim.player.x)+Math.abs(saved.z-this.sim.player.z)>.1)setShared('runespace.worldPosition',{x:this.sim.player.x,z:this.sim.player.z});
@@ -130,6 +185,7 @@ export default class GuildWorld extends View {
     cx.notify();
   }
   report(){setShared('runespace.worldReport',{player:{x:this.sim.player.x,z:this.sim.player.z,activity:poseFor(this.sim.player)},walking:this.sim.path.length,target:this.sim.targetKey,
+    adventure:{...this.sim.saveAdventure(),targetKey:this.sim.adventure.targetKey,entities:this.sim.adventure.entities.map(({key,kind,activity,hp,x,z})=>({key,kind,activity,hp,x,z}))},
     nearest:this.sim.nearest()?.key||null,npcs:[...this.sim.npcs.values()].map(p=>({key:p.key,name:p.name,x:p.x,z:p.z,status:p.status,activity:p.activity,moving:p.moving})),
     faces:this.faceCount||0,paths:this.pathCount||0,dirtyLayers:this.dirtyLayers,renderMs:this.renderTime,simulationHz:this.fps,width:this.width,height:this.height,yaw:this.yaw,zoom:this.zoom,pitch:this.pitch,at:Date.now()});}
   openChat(key){
@@ -145,6 +201,10 @@ export default class GuildWorld extends View {
   talk(key){
     const p=this.sim.npcs.get(key);if(!p)return;
     this.sim.approach(key);this.hint='Walking over to '+p.name+'…';this.focus.focus();
+  }
+  interact(key){
+    if(this.progressReady)this.sim.interact(key);
+    this.focus.focus();
   }
   home(){this.zoom=1.13;this.yaw=.18;this.pitch=DEFAULT_PITCH;this.walk({x:0,z:10.5});}
   dance(){this.sim.dance();this.focus.focus();}
@@ -166,20 +226,22 @@ export default class GuildWorld extends View {
     if(key==='m'){if(!e.is_held)run('runespace.music');cx.stop_propagation();return;}
     if(key==='i'){this.openInventory();cx.stop_propagation();return;}
     if(key==='enter'||key==='return'){const p=this.sim.nearest();if(p)this.openChat(p.key);cx.stop_propagation();}
-    if(key==='escape'){this.sim.stopDance();this.sim.path=[];this.sim.targetKey=null;this.hint='Walk cancelled.';cx.stop_propagation();}
+    if(key==='escape'){this.sim.stopDance();this.sim.cancelAdventure();this.sim.path=[];this.sim.targetKey=null;this.hint='Walk cancelled.';cx.stop_propagation();}
     if(key==='n'){this.names=!this.names;cx.stop_propagation();}
     if(key==='-'||key==='='){this.zoom=clamp(this.zoom+(key==='='?.1:-.1),.75,1.9);cx.stop_propagation();}
     cx.notify();
   }
   pick(point){
-    return this.projected.filter(p=>Math.abs(point.x-p.feet.x)<Math.max(14,this.camera.scale*.42)&&point.y>=p.head.y-7&&point.y<=p.feet.y+6)
-      .sort((a,b)=>a.feet.depth-b.feet.depth)[0]?.key||null;
+    return this.projected.filter(p=>Math.abs(point.x-p.feet.x)<Math.max(12,this.camera.scale*p.radius)&&point.y>=p.head.y-6&&point.y<=p.feet.y+5)
+      .sort((a,b)=>Number(b.agent)-Number(a.agent)||a.feet.depth-b.feet.depth)[0]?.key||null;
   }
   pointer(e,cx){
     if(!e.local_position)return;
     this.focus.focus();
     const key=this.pick(e.local_position);
-    if(key)this.talk(key);else this.walk(this.camera.ground(e.local_position.x,e.local_position.y));
+    if(this.sim.npcs.has(key))this.talk(key);
+    else if(key)this.interact(key);
+    else this.walk(this.camera.ground(e.local_position.x,e.local_position.y));
     cx.stop_propagation();cx.notify();
   }
   projectScene(){
@@ -220,6 +282,23 @@ export default class GuildWorld extends View {
       actors.push(...actor.faces);
       if((p.status==='blocked'||p.status==='error')&&!this.sim.wasStale)m.cone(p.x,2.15+Math.sin(t*3)*.07,p.z,.13,.3,'#f4b75e',4,.07);
     }
+    for(const entity of this.sim.adventure.entities){
+      if(entity.activity==='hidden')continue;
+      const frame=entity.kind==='oak'?0:Math.floor(entity.posePhase*8)%8;
+      const pose=[entity.kind,entity.activity,frame].join('/');
+      let model=this.adventureMeshes.get(pose);
+      if(!model){
+        model=buildAdventureModel(Mesh,entity.kind,entity.activity,frame/8);
+        this.adventureMeshes.set(pose,model);
+      }
+      const key=[cameraKey,pose,entity.x,entity.z,entity.yaw].join('|');
+      let actor=this.actors.get(entity.key);
+      if(!actor||actor.key!==key){
+        const mesh=new Mesh();mesh.transformed(model,entity.x,entity.z,entity.yaw);
+        actor={key,faces:camera.faces(mesh,padding)};this.actors.set(entity.key,actor);
+      }
+      actors.push(...actor.faces);
+    }
     // Lively fire and sparks; these are decorative, never task progress indicators.
     for(let i=0;i<4;i++){const a=t*1.6+i*1.7;m.cone(Math.cos(a)*.2,.25,3+Math.sin(a)*.2,.25,.7+Math.sin(t*6+i)*.18,i%2?'#e7b94b':'#cd713c',5,0);}
     const end=this.sim.path[this.sim.path.length-1];if(end){
@@ -233,7 +312,7 @@ export default class GuildWorld extends View {
     if(this.hover)visible.add(this.hover);if(this.sim.targetKey)visible.add(this.sim.targetKey);
     this.projected=[...this.sim.npcs.values()].map(p=>{
       const elevation=elevationOf(p);
-      return {key:p.key,feet:this.camera.project([p.x,elevation,p.z]),head:this.camera.project([p.x,elevation+p.height,p.z])};
+      return {key:p.key,agent:true,radius:.42,feet:this.camera.project([p.x,elevation,p.z]),head:this.camera.project([p.x,elevation+p.height,p.z])};
     });
     const elements=[];
     for(const h of this.projected){
@@ -247,8 +326,28 @@ export default class GuildWorld extends View {
         .on_mouse_down('left',(_e,cx)=>{this.talk(p.key);cx.stop_propagation();})
         .child(text(p.name,12,selected?'#ffe58d':'#e5debf').font_family('Geist').truncate()));
     }
+    for(const entity of this.sim.adventure.entities){
+      if(entity.activity==='hidden')continue;
+      const stump=entity.activity==='stump';
+      const feet=this.camera.project([entity.x,0,entity.z]);
+      const head=this.camera.project([entity.x,stump?.48:entity.height,entity.z]);
+      const radius=entity.kind==='oak'?(stump?.42:1.35):entity.kind==='rat'?.68:.5;
+      this.projected.push({key:entity.key,agent:false,radius,feet,head});
+      if(entity.hit>0)elements.push(this.hitMarker(head,entity.hit));
+      if(!this.names&&this.hover!==entity.key&&this.sim.adventure.targetKey!==entity.key)continue;
+      const title=adventureAction(entity),w=title.length*7+16;
+      elements.push(V().id('adventure-'+entity.key).absolute().left(clamp(head.x-w/2,0,this.width-w)).top(head.y-23)
+        .w(w).px(6).py(3).bg('#28271ee8').border(1).border_color('#8c8059').cursor_pointer()
+        .on_mouse_down('left',(_e,cx)=>{this.interact(entity.key);cx.stop_propagation();})
+        .child(text(title,12,entity.kind==='oak'?'#d7e7b0':'#f5cd91')));
+    }
     const me=this.camera.project([p.x,1.95,p.z]);elements.push(div().absolute().left(me.x-18).top(me.y-15).child(text('You',12,'#fff2b4')));
+    if(p.hit>0)elements.push(this.hitMarker(me,p.hit));
     return elements;
+  }
+  hitMarker(point,damage){
+    return div().absolute().left(point.x-9).top(point.y+6).w(20).h(18).text_center()
+      .bg('#8c342c').border(1).border_color('#e5b593').child(text(String(damage),13,'#fff5d8'));
   }
   minimap(){
     const size=158,scale=3.5,center=79,shapes=[];
@@ -271,6 +370,10 @@ export default class GuildWorld extends View {
         .child(text('Click a companion to walk over and open their conversation here.',13))
         .child(h_flex().gap(8).child(button('embedded-world','Classic view',()=>{setShared('runespace.mode','world');exec('/usr/bin/python3',[appHome()+'/mods/runespace/metal/control.py','stop','--app-home',appHome()]);}))));
     const nearest=this.sim.nearest(),hovered=this.sim.npcs.get(this.hover),talking=hovered||nearest;
+    const adventure=this.sim.adventure;
+    const target=adventure.entities.find(e=>e.key===adventure.targetKey);
+    const pointed=adventure.entities.find(e=>e.key===this.hover);
+    const opponent=target&&target.kind!=='oak'?target:null;
     const roster=[...this.sim.npcs.values()],workers=roster.filter(a=>a.status==='working').length,idle=roster.filter(a=>a.status==='idle').length;
     const root=div().id('runespace-world').relative().size_full().min_w(0).min_h(0).overflow_hidden().bg('#8f9e77').track_focus(this.focus).key_context('GuildWorld')
       .on_size_change((s,cx)=>{this.width=s.width;this.height=s.height;cx.notify();})
@@ -301,7 +404,10 @@ export default class GuildWorld extends View {
         .child(text('THE GUILD GREEN',20,'#efcf76').font_family('Georgia'))
         .child(button('runespace-dance','Dance  G',()=>this.dance(),this.sim.player.activity==='dance')))
       .child(text(this.sim.wasStale?'Reconnecting to your company…':workers+' working  ·  '+idle+' at the commons',12,'#c9c5a6'))
-      .child(text(hovered?'Talk-to '+hovered.name:'Click the ground to walk. Click a companion to chat.',12,'#f3e0a6').font_family('Geist')));
+      .child(text(hovered?'Talk-to '+hovered.name:pointed?adventureAction(pointed):'Click an oak to chop, a creature to fight, or a companion to chat.',12,'#f3e0a6').font_family('Geist'))
+      .when(!!adventure.message,e=>e.child(text(adventure.message,12,'#ffe18d')))
+      .when(!!opponent,e=>e.child(text('You '+adventure.hp+'/'+adventure.maxHp+' HP · '+opponent.name+' '+opponent.hp+'/'+opponent.maxHp+' HP',12,'#f7ca9e')))
+      .when(adventure.logs>0||adventure.combatXp>0,e=>e.child(text(adventure.logs+' logs · Woodcutting '+adventure.woodXp+' XP · Combat '+adventure.combatXp+' XP',11,'#dfd7b2'))));
     root.child(this.minimap());
     root.child(h_flex().absolute().right(18).top(252)
       .on_mouse_down('left',(_e,cx)=>cx.stop_propagation())

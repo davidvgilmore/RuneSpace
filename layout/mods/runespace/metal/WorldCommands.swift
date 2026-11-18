@@ -1,5 +1,18 @@
 import Foundation
 
+extension AdventureState {
+    func report(camera: GPUCamera) -> [String:Any] {
+        let objects = entities.map { entity -> [String:Any] in
+            let center = camera.screen(entity.x,entity.pickHeight/2,entity.z)
+            return ["key":entity.key,"kind":entity.kind,"name":entity.name,"activity":entity.activity,
+                    "x":entity.x,"z":entity.z,"screenX":center.x,"screenY":center.y,
+                    "hp":entity.hp as Any? ?? NSNull(),"maxHp":entity.maxHp as Any? ?? NSNull()]
+        }
+        return ["entities":objects,"targetKey":targetKey as Any? ?? NSNull(),"message":message ?? "",
+                "hp":hp,"maxHp":maxHp,"logs":logs,"woodXp":woodXp,"combatXp":combatXp]
+    }
+}
+
 // The command palette and `herdr-app do` address the same session keys as mouse picks.
 extension WorldWindow {
     func updateCommands(_ shared: [String: Any], initial: Bool = false) {
@@ -34,7 +47,7 @@ extension WorldWindow {
             guard let frame else { return }
             let report: [String: Any] = [
                 "player": ["x": frame.player.x, "z": frame.player.z],
-                "playerActivity": frame.player.activity ?? "idle",
+                "playerActivity": frame.player.activity ?? "idle", "adventure": frame.adventure.report(camera:camera),
                 "nearest": nearest()?.key as Any? ?? NSNull(), "yaw": camera.yaw, "zoom": camera.zoom, "pitch": camera.pitch,
                 "width": camera.size.width, "height": camera.size.height,
                 "at": Int64(Date().timeIntervalSince1970 * 1000),

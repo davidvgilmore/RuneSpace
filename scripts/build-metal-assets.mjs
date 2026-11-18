@@ -4,8 +4,8 @@ import {fileURLToPath} from 'node:url';
 import {resolve} from 'node:path';
 import {createHash} from 'node:crypto';
 import {DEFAULT_LOADOUT,EQUIPMENT_ITEMS,PLAYER_PARTS,playerPartKey} from '../layout/mods/runespace/equipment.js';
-import {character,makeWorld,MOTION,PLAYER_IDLE_CLIP,clipFor} from '../layout/mods/runespace/world-engine.js';
-import {NPC_KINDS} from '../layout/mods/runespace/world-art.js';
+import {Mesh,character,makeWorld,MOTION,PLAYER_IDLE_CLIP,clipFor} from '../layout/mods/runespace/world-engine.js';
+import {NPC_KINDS,WORK_CYCLES,buildAdventureModel} from '../layout/mods/runespace/world-art.js';
 
 const mod = new URL('../layout/mods/runespace/', import.meta.url);
 const output = process.argv[2] ? resolve(process.argv[2]) : fileURLToPath(new URL('metal/', mod));
@@ -32,8 +32,7 @@ const actors={};
 for (const kind of NPC_KINDS) {
   for (const host of ['local','remote','other']) {
     const key=kind+'/'+host;
-    for (const pose of Object.keys(MOTION)) {
-      if(pose==='dance')continue;
+    for (const pose of Object.keys(WORK_CYCLES)) {
       const {frames,seconds}=MOTION[pose];
       for(let frame=0;frame<frames;frame++) {
         const posePhase=frame/frames;
@@ -43,15 +42,26 @@ for (const kind of NPC_KINDS) {
     }
   }
 }
+for(const kind of ['oak','goblin','rat']){
+  const frames=kind==='oak'?1:8;
+  for(const activity of kind==='oak'?['idle','stump']:['idle','attack']){
+    for(let i=0;i<frames;i++){
+      const mesh=buildAdventureModel(Mesh,kind,activity,i/frames);
+      actors[`Adventure:${kind}:${activity}:${i}`]=triangles(mesh);
+    }
+  }
+}
 // Bake one animated mesh per wearable, so swapping a slot never rebuilds a full
 // outfit. Static poses share the same Metal buffer across animation frames.
 const aliases={},seen=new Map();
 for(const slot of PLAYER_PARTS){
   const items=EQUIPMENT_ITEMS.filter(item=>item.slot===slot).map(item=>item.id);
   if(!['weapon','shield','cape'].includes(slot))items.push('none');
-  for(const id of items)for(const pose of ['idle','walk','dance']){
+  for(const id of items)for(const pose of ['idle','walk','dance','wood','attack']){
+    // Every outfit borrows the same two-handed hatchet during woodcutting.
+    if(pose==='wood'&&(slot==='shield'||slot==='weapon'&&id!==DEFAULT_LOADOUT.weapon))continue;
     const {frames,seconds}=clipFor({player:true},pose);
-    const grips=slot==='torso'&&pose!=='dance'?['abyssal-whip','armadyl-godsword']:['abyssal-whip'];
+    const grips=slot==='torso'&&pose!=='dance'&&pose!=='wood'?['abyssal-whip','armadyl-godsword']:['abyssal-whip'];
     for(const grip of grips){
       const loadout={...DEFAULT_LOADOUT,weapon:grip,[slot]:id};
       const part=playerPartKey(slot,loadout,pose);

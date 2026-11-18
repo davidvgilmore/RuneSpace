@@ -66,11 +66,11 @@ export const ACTIVITY={wood:'Chopping wood',mine:'Mining ore',smith:'Smithing',f
 export const MOTION={
   ...Object.fromEntries(Object.entries(WORK_CYCLES).map(([pose,seconds])=>
     [pose,{seconds,frames:pose==='idle'?1:pose==='fish'?24:16}])),
-  dance:{seconds:4,frames:40}
+  dance:{seconds:4,frames:40},attack:{seconds:1.2,frames:12}
 };
 export function poseFor(person){
   if(person.moving)return 'walk';
-  if(person.player&&person.activity==='dance')return 'dance';
+  if(person.player&&(person.activity==='dance'||person.activity==='attack'))return person.activity;
   return STATIONS[person.activity]?person.activity:'idle';
 }
 // The fire cape flows while its wearer stands still. Idle companions share a single pose.
@@ -81,6 +81,11 @@ export function clipFor(person,pose){
 export function animationPhase(person,time){
   const pose=poseFor(person),clock=clipFor(person,pose);
   if(pose==='dance')return clamp((time-(person.danceStartedAt??time))/clock.seconds,0,1-Number.EPSILON);
+  if(person.player&&Number.isFinite(person.actionStartedAt)){
+    const cycles=Math.max(0,(time-person.actionStartedAt)/clock.seconds);
+    if(pose==='wood')return cycles%1;
+    if(pose==='attack')return Math.min(cycles,1-Number.EPSILON);
+  }
   return clock.frames===1?0:(time/clock.seconds+(hash(person.key||'player')%4096)/4096)%1;
 }
 export const HOST_COLOR={local:'#527d58',remote:'#527da9',other:'#91689a'};
@@ -127,10 +132,181 @@ export function character(person,time){
   return buildCharacter(Mesh,hash,{...person,posePhase},time);
 }
 
+// These two oaks stay separate from the trees assigned to working companions.
+const ADVENTURE_SPAWNS = [
+  {key:'oak-by-market',kind:'oak',name:'Oak',x:-4,z:12},
+  {key:'oak-by-lane',kind:'oak',name:'Oak',x:-3,z:16.5},
+  {key:'giant-rat',kind:'rat',name:'Giant rat',x:2.2,z:15},
+  {key:'goblin',kind:'goblin',name:'Goblin',x:5.3,z:11.8},
+];
+const ADVENTURE_TYPES = {
+  oak: {height:3.8,reach:1.40,maxHp:0,cooldown:20,xp:25},
+  rat: {height:.85,reach:1.05,maxHp:5,cooldown:14,xp:12},
+  goblin: {height:1.62,reach:1.20,maxHp:8,cooldown:14,xp:20},
+};
+const PLAYER_MAX_HP=10;
+const progressCount=value=>Number.isSafeInteger(value)&&value>=0?value:0;
+const savedHp=value=>Number.isSafeInteger(value)?clamp(value,1,PLAYER_MAX_HP):PLAYER_MAX_HP;
+
+// Called after a competing writer commits. Only replay events since our last
+// successful save. In particular, a paused view can still display an old stump.
+export function mergeAdventureProgress(base,local,current,now=Date.now()){
+  if(base?.version!==1)base={};
+  if(local?.version!==1)local=base;
+  if(current?.version!==1)current={};
+  const mergeCount=(before,mine,theirs)=>Math.min(Number.MAX_SAFE_INTEGER,
+    progressCount(theirs)+Math.max(0,progressCount(mine)-progressCount(before)));
+  const merged={version:1,respawns:{},depletions:{}};
+  for(const key of ['logs','woodXp','combatXp']){
+    merged[key]=mergeCount(base[key],local[key],current[key]);
+  }
+  merged.hp=clamp(savedHp(current.hp)+savedHp(local.hp)-savedHp(base.hp),1,PLAYER_MAX_HP);
+  for(const {key,kind} of ADVENTURE_SPAWNS){
+    const before=progressCount(base.depletions?.[key]);
+    const mine=progressCount(local.depletions?.[key]);
+    const count=mergeCount(before,mine,current.depletions?.[key]);
+    if(count)merged.depletions[key]=count;
+    const baseDue=progressCount(base.respawns?.[key]);
+    const localDue=progressCount(local.respawns?.[key]);
+    const reward=kind==='oak'?'logs':'combatXp';
+    // Older snapshots have no per-target count. An expired deadline can only
+    // represent a new harvest if this view also earned the corresponding reward.
+    const newLegacyEvent=!local.depletions&&baseDue<=now
+      &&progressCount(local[reward])>progressCount(base[reward]);
+    const localEvent=mine>before||!baseDue||newLegacyEvent;
+    const until=Math.max(progressCount(current.respawns?.[key]),localEvent?localDue:0);
+    if(until>now)merged.respawns[key]=until;
+  }
+  return merged;
+}
+
+class Adventure {
+  constructor() {
+    this.entities=ADVENTURE_SPAWNS.map(spawn=>{
+      const type=ADVENTURE_TYPES[spawn.kind];
+      return {...spawn,height:type.height,maxHp:type.maxHp,hp:type.maxHp,yaw:Math.PI,
+        activity:'idle',posePhase:0,respawnAt:0,depletions:0};
+    });
+    this.targetKey=null;
+    this.turn=null;
+    this.landed=false;
+    this.startedAt=0;
+    this.exchange=0;
+    this.nextHeal=0;
+    this.message='';
+    this.messageUntil=0;
+    this.hp=this.maxHp=PLAYER_MAX_HP;
+    this.woodXp=0;
+    this.combatXp=0;
+    this.logs=0;
+    this.revision=0;
+  }
+  say(text,time) {
+    this.message=text;
+    this.messageUntil=time+6;
+  }
+  step(sim) {
+    const now=sim.time;
+    if(sim.player.hit&&now>=sim.player.hitUntil)sim.player.hit=0;
+    for(const e of this.entities){
+      if(e.hit&&now>=e.hitUntil)e.hit=0;
+      if(e.respawnAt&&now>=e.respawnAt){
+        e.activity='idle';e.hp=e.maxHp;e.respawnAt=0;this.revision++;
+      }
+      e.posePhase=e.activity==='attack'
+        ?clamp((now-this.startedAt)/MOTION.attack.seconds,0,1-Number.EPSILON)
+        :(now*.55+(e.kind==='rat'?.4:0))%1;
+    }
+    if(!this.targetKey){
+      if(now>=this.messageUntil)this.message='';
+      if(this.hp<this.maxHp&&now>=this.nextHeal){
+        this.hp++;this.nextHeal=now+8;this.revision++;
+      }
+      return;
+    }
+    if(sim.path.length)return;
+    const e=this.entities.find(item=>item.key===this.targetKey);
+    if(distance(sim.player,e)>ADVENTURE_TYPES[e.kind].reach+.12){sim.cancelAdventure();return;}
+    sim.player.yaw=Math.atan2(e.x-sim.player.x,e.z-sim.player.z);
+    sim.player.moving=false;
+    if(!this.turn){
+      this.exchange=0;
+      if(e.kind==='oak'){
+        this.turn='chop';this.startedAt=now;
+        sim.player.activity='wood';sim.player.actionStartedAt=now;
+        this.say('Chopping the oak…',now);
+      }else{
+        e.yaw=Math.atan2(sim.player.x-e.x,sim.player.z-e.z);
+        this.startTurn(sim,e,'player');
+        this.say('Facing the '+e.name.toLowerCase()+'. Walk away to retreat.',now);
+      }
+    }
+    const elapsed=now-this.startedAt;
+    if(this.turn==='chop'){
+      // The axe meets the trunk halfway through each swing.
+      if(elapsed>=2.5*MOTION.wood.seconds){
+        this.logs++;this.woodXp+=ADVENTURE_TYPES.oak.xp;
+        this.finish(sim,e,'stump','Oak felled. +1 oak log · +25 Woodcutting XP');
+      }
+      return;
+    }
+    if(!this.landed&&elapsed>=MOTION.attack.seconds/2){
+      this.landed=true;
+      const roll=hash(e.key+'/'+this.combatXp+'/'+this.exchange);
+      if(this.turn==='player'){
+        const damage=Math.min(e.hp,2+roll%3);
+        e.hp-=damage;
+        e.hit=damage;e.hitUntil=now+.7;
+        this.say('You hit the '+e.name.toLowerCase()+' for '+damage+'.',now);
+        if(e.hp===0){
+          const xp=ADVENTURE_TYPES[e.kind].xp;this.combatXp+=xp;
+          this.finish(sim,e,'hidden',e.name+' defeated. +'+xp+' Combat XP');
+          return;
+        }
+      }else{
+        const damage=Math.min(this.hp,1+roll%(e.kind==='rat'?2:3));
+        this.hp-=damage;this.revision++;
+        sim.player.hit=damage;sim.player.hitUntil=now+.7;
+        this.nextHeal=now+8;
+        this.say(e.name+' hits you for '+damage+'.',now);
+        if(this.hp===0){
+          sim.cancelAdventure();
+          Object.assign(sim.player,{x:0,z:12,yaw:Math.PI,moving:false,hit:0});
+          this.hp=this.maxHp;
+          this.say('You recover at the commons.',now);
+          return;
+        }
+      }
+    }
+    if(elapsed>=MOTION.attack.seconds){
+      this.exchange++;
+      this.startTurn(sim,e,this.turn==='player'?'creature':'player');
+    }
+  }
+  startTurn(sim,e,turn) {
+    this.turn=turn;this.startedAt=sim.time;this.landed=false;
+    e.activity=turn==='creature'?'attack':'idle';
+    e.posePhase=0;
+    sim.player.activity=turn==='player'?'attack':'idle';
+    sim.player.actionStartedAt=sim.time;
+  }
+  finish(sim,e,activity,message) {
+    sim.cancelAdventure();
+    e.hp=0;e.activity=activity;e.respawnAt=sim.time+ADVENTURE_TYPES[e.kind].cooldown;
+    e.depletions++;
+    this.revision++;
+    this.say(message,sim.time);
+  }
+}
+
 export class Simulation {
   constructor(){
     this.world=makeWorld();this.npcs=new Map();this.player={key:'player',x:0,z:12,yaw:Math.PI,player:true,activity:'idle',moving:false};
     this.path=[];this.targetKey=null;this.time=0;this.arrived=null;this.revision='';this.wasStale=false;
+    this.adventure=new Adventure();
+    for(const e of this.adventure.entities){
+      if(e.kind==='oak')this.world.obstacles.push({x:e.x,z:e.z,w:.8,d:.8});
+    }
     // Cache half-unit navigation cells as a walk needs them. Preparing every
     // cell at startup can exhaust the host's per-callback time budget.
     this.gridBlocked=new Uint8Array(81*77);
@@ -257,7 +433,83 @@ export class Simulation {
     for(const key of this.npcs.keys())if(!assigned.has(key))this.npcs.delete(key);
     if(this.targetKey&&!this.npcs.has(this.targetKey)){this.targetKey=null;this.path=[];}
   }
+  interact(key){
+    const a=this.adventure,e=a.entities.find(item=>item.key===key);
+    if(!e||e.activity==='hidden')return false;
+    if(a.targetKey===key)return true;
+    this.cancelAdventure();this.stopDance();
+    this.targetKey=null;this.arrived=null;this.path=[];
+    if(e.activity==='stump'){a.say('The oak is regrowing.',this.time);return false;}
+    const reach=ADVENTURE_TYPES[e.kind].reach;
+    const angle=Math.atan2(this.player.x-e.x,this.player.z-e.z);
+    for(const turn of [0,1,-1,2,-2,3,-3,4]){
+      const side=angle+turn*Math.PI/4,dx=Math.sin(side),dz=Math.cos(side);
+      const goal={x:e.x+dx*reach,z:e.z+dz*reach};
+      // Keep a clear line from the tool to the outside face of the trunk.
+      const edge=e.kind==='oak'?{x:e.x+dx*.85,z:e.z+dz*.85}:e;
+      if(this.blocked(goal.x,goal.z)||!this.clearSegment(goal,edge))continue;
+      if(distance(this.player,goal)>.08){
+        const path=this.findPath(this.player,goal);
+        if(!path.length)continue;
+        this.path=path;
+      }
+      a.targetKey=key;
+      a.say((e.kind==='oak'?'Approaching the oak':'Approaching the '+e.name.toLowerCase())+'…',this.time);
+      return true;
+    }
+    a.say('There is no clear path to the '+e.name.toLowerCase()+'.',this.time);
+    return false;
+  }
+  cancelAdventure(){
+    const a=this.adventure;
+    if(!a.targetKey)return;
+    const e=a.entities.find(item=>item.key===a.targetKey);
+    e.activity='idle';e.hp=e.maxHp;
+    a.targetKey=null;a.turn=null;a.message='';
+    this.path=[];this.player.moving=false;this.player.activity='idle';
+    delete this.player.actionStartedAt;
+  }
+  saveAdventure(now=Date.now()){
+    const {logs,woodXp,combatXp,hp,entities}=this.adventure;
+    const respawns={},depletions={};
+    for(const e of entities){
+      if(e.respawnAt>this.time)respawns[e.key]=now+Math.round((e.respawnAt-this.time)*1000);
+      if(e.depletions)depletions[e.key]=e.depletions;
+    }
+    return {version:1,logs,woodXp,combatXp,hp,respawns,depletions};
+  }
+  restoreAdventure(saved,now=Date.now()){
+    if(!saved||saved.version!==1)return false;
+    this.cancelAdventure();
+    this.adventure.nextHeal=this.time+8;
+    return this.reconcileAdventure(saved,now);
+  }
+  reconcileAdventure(saved,now=Date.now()){
+    if(!saved||saved.version!==1)return false;
+    const a=this.adventure;
+    for(const key of ['logs','woodXp','combatXp']){
+      a[key]=progressCount(saved[key]);
+    }
+    const hp=savedHp(saved.hp);
+    if(a.hp!==hp)a.nextHeal=this.time+8;
+    a.hp=hp;
+    for(const e of a.entities){
+      const until=saved.respawns?.[e.key];
+      const remaining=Number.isFinite(until)?clamp((until-now)/1000,0,ADVENTURE_TYPES[e.kind].cooldown):0;
+      e.depletions=progressCount(saved.depletions?.[e.key]);
+      if(a.targetKey===e.key){
+        if(!remaining)continue;
+        this.cancelAdventure();
+      }
+      e.respawnAt=remaining?this.time+remaining:0;
+      e.hp=remaining?0:e.maxHp;
+      e.activity=remaining?(e.kind==='oak'?'stump':'hidden'):'idle';
+    }
+    a.revision++;
+    return true;
+  }
   dance(){
+    this.cancelAdventure();
     this.path=[];this.targetKey=null;this.arrived=null;
     this.player.moving=false;this.player.activity='dance';this.player.danceStartedAt=this.time;
     return true;
@@ -265,10 +517,10 @@ export class Simulation {
   stopDance(){
     this.player.activity='idle';delete this.player.danceStartedAt;
   }
-  walk(dest){this.stopDance();this.targetKey=null;this.arrived=null;this.path=this.findPath(this.player,dest);return this.path.length>0;}
+  walk(dest){this.cancelAdventure();this.stopDance();this.targetKey=null;this.arrived=null;this.path=this.findPath(this.player,dest);return this.path.length>0;}
   approach(key){
     const p=this.npcs.get(key);if(!p)return false;
-    this.stopDance();
+    this.cancelAdventure();this.stopDance();
     this.arrived=null;
     if(distance(p,this.player)<2.6&&this.clearSegment(this.player,p)){this.path=[];this.targetKey=key;return true;}
     const angle=Math.atan2(this.player.x-p.x,this.player.z-p.z);
@@ -291,7 +543,7 @@ export class Simulation {
     dt=clamp(dt,0,.1);this.time+=dt;
     const forward=(keys.up?1:0)-(keys.down?1:0),side=(keys.right?1:0)-(keys.left?1:0);
     if(this.player.activity==='dance'&&(forward||side||this.time-this.player.danceStartedAt>=MOTION.dance.seconds))this.stopDance();
-    if(forward||side){this.path=[];this.targetKey=null;this.arrived=null;const norm=Math.hypot(forward,side),speed=dt*4.2;
+    if(forward||side){this.cancelAdventure();this.path=[];this.targetKey=null;this.arrived=null;const norm=Math.hypot(forward,side),speed=dt*4.2;
       const dx=(side*Math.cos(yaw)-forward*Math.sin(yaw))/norm*speed,dz=(-side*Math.sin(yaw)-forward*Math.cos(yaw))/norm*speed;
       if(!this.blocked(this.player.x+dx,this.player.z))this.player.x+=dx;
       if(!this.blocked(this.player.x,this.player.z+dz))this.player.z+=dz;
@@ -302,6 +554,7 @@ export class Simulation {
       if(p&&distance(this.player,p)<2.6&&this.clearSegment(this.player,p)){this.arrived=p.key;this.player.yaw=Math.atan2(p.x-this.player.x,p.z-this.player.z);this.targetKey=null;}
       else if(p)this.approach(p.key);
     }
+    this.adventure.step(this);
   }
   nearest(){return [...this.npcs.values()].filter(a=>distance(a,this.player)<2.8).sort((a,b)=>distance(a,this.player)-distance(b,this.player))[0]||null;}
 }

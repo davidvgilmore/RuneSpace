@@ -54,11 +54,15 @@ export function equipItem(raw,slot,id){
 // Shields render last so translucent faces blend against the rest of the outfit.
 export const PLAYER_PARTS=['legs','boots','torso','cape','head','weapon','shield'];
 export function playerPartKey(slot,gear,pose){
-  const grip=slot==='torso'&&byId.get(gear.weapon)?.twoHanded&&pose!=='dance'?':2h':'';
+  if(pose==='wood'&&slot==='weapon')return 'weapon:woodcutting-axe';
+  const grip=slot==='torso'&&byId.get(gear.weapon)?.twoHanded&&pose!=='dance'&&pose!=='wood'?':2h':'';
   return slot+':'+gear[slot]+grip;
 }
 export function equippedPartKeys(gear,pose){
-  return PLAYER_PARTS.filter(slot=>gear[slot]!=='none'||!['weapon','shield','cape'].includes(slot))
+  return PLAYER_PARTS.filter(slot=>{
+    if(pose==='wood'&&(slot==='weapon'||slot==='shield'))return slot==='weapon';
+    return gear[slot]!=='none'||!['weapon','shield','cape'].includes(slot);
+  })
     .map(slot=>playerPartKey(slot,gear,pose));
 }
 

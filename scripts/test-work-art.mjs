@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Mesh, STATIONS, hash } from '../layout/mods/runespace/world-engine.js';
-import { NPC_KINDS, WORK_CYCLES, buildCharacter, buildWorldArt, classFor, playerDancePose } from '../layout/mods/runespace/world-art.js';
+import { NPC_KINDS, WORK_CYCLES, buildAdventureModel, buildCharacter, buildWorldArt, classFor, playerDancePose } from '../layout/mods/runespace/world-art.js';
+import { DEFAULT_LOADOUT, equippedPartKeys, normalizeLoadout } from '../layout/mods/runespace/equipment.js';
 
 class Materials extends Mesh {
   face(points,color) { super.face(points,color,false); }
@@ -14,6 +15,41 @@ const difference=(a,b)=>a.map((v,i)=>v-b[i]);
 const dot=(a,b)=>a.reduce((n,v,i)=>n+v*b[i],0);
 const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
 const bounds=(points,axis)=>[Math.min(...points.map(p=>p[axis])),Math.max(...points.map(p=>p[axis]))];
+
+test('a felled oak leaves its matching stump and each creature has a distinct strike',()=>{
+  const oak=buildAdventureModel(Materials,'oak','idle'),stump=buildAdventureModel(Materials,'oak','stump');
+  assert.ok(bounds(oak.faces.flatMap(f=>f.points),1)[1]>3);
+  assert.ok(bounds(stump.faces.flatMap(f=>f.points),1)[1]<.50);
+  assert.ok(only(stump,['#dbb778']).length);
+  for(const kind of ['goblin','rat']){
+    const windup=buildAdventureModel(Materials,kind,'attack',.25);
+    const strike=buildAdventureModel(Materials,kind,'attack',.5);
+    assert.equal(windup.faces.length,strike.faces.length);
+    const vertices=mesh=>mesh.faces.flatMap(f=>f.points);
+    assert.ok(vertices(strike).flat().every(Number.isFinite));
+    assert.ok(bounds(vertices(strike),2)[1]>bounds(vertices(windup),2)[1]+.3);
+    assert.equal(buildAdventureModel(Materials,kind,'hidden').faces.length,0);
+  }
+});
+
+test('all outfits use the axe while chopping and regain their own weapons when fighting',()=>{
+  for(const weapon of ['none','abyssal-whip','dragon-scimitar','armadyl-godsword']){
+    const loadout=normalizeLoadout({...DEFAULT_LOADOUT,weapon});
+    const woodParts=equippedPartKeys(loadout,'wood');
+    assert.ok(woodParts.includes('weapon:woodcutting-axe'));
+    assert.equal(woodParts.some(key=>key.startsWith('shield:')||key.endsWith(':2h')),false);
+    const figure=(activity,phase,part)=>buildCharacter(Materials,hash,{player:true,activity,loadout,
+      equipmentPart:part,posePhase:phase},0);
+    assert.ok(only(figure('wood',.5,'weapon'),['#8e9da0']).length);
+    assert.equal(figure('wood',.5,'shield').faces.length,0);
+    const fighting=equippedPartKeys(loadout,'attack');
+    assert.equal(fighting.includes('weapon:'+weapon),weapon!=='none');
+    assert.equal(fighting.includes('torso:dragon-chainbody:2h'),weapon==='armadyl-godsword');
+    assert.ok(!only(figure('attack',.5,'weapon'),['#8e9da0']).length);
+    const windup=figure('attack',.25,'torso'),impact=figure('attack',.5,'torso');
+    assert.notDeepEqual(windup.faces,impact.faces);
+  }
+});
 
 test('front-facing characters hold their main weapon on viewer-left and shields on viewer-right',()=>{
   const check=(mesh,colors,side)=>{

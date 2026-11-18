@@ -3,9 +3,10 @@ let guildSimulation;
 function guildEquipment(encoded){
   guildSimulation.player.loadout=normalizeLoadout(JSON.parse(encoded||'{}'));
 }
-function guildInit(savedPositionJSON) {
+function guildInit(savedPositionJSON,adventureJSON) {
   guildSimulation=new Simulation();
   guildEquipment('{}');
+  guildSimulation.restoreAdventure(readAdventureJSON(adventureJSON));
   const position=JSON.parse(savedPositionJSON||'{}')||{};
   if(Number.isFinite(position.x)&&Number.isFinite(position.z)&&!guildSimulation.blocked(position.x,position.z)){
     Object.assign(guildSimulation.player,{x:position.x,z:position.z});
@@ -16,8 +17,21 @@ function guildSync(agentsJSON,stale) {
 }
 function guildWalk(x,z) {return guildSimulation.walk({x,z});}
 function guildTalk(key) {return guildSimulation.approach(key);}
+function guildInteract(key) {return guildSimulation.interact(key);}
+function readAdventureJSON(raw) {
+  try {return JSON.parse(raw||'null');} catch(_) {return null;}
+}
+function guildSaveAdventure() {return JSON.stringify(guildSimulation.saveAdventure());}
+function guildMergedAdventure(base,local,current) {
+  return JSON.stringify(mergeAdventureProgress(readAdventureJSON(base),readAdventureJSON(local),readAdventureJSON(current)));
+}
+function guildReconcileAdventure(raw) {
+  guildSimulation.reconcileAdventure(readAdventureJSON(raw));
+  return guildSimulation.adventure.revision;
+}
 function guildDance() {return guildSimulation.dance();}
 function guildStop() {
+  guildSimulation.cancelAdventure();
   guildSimulation.stopDance();
   guildSimulation.targetKey=null;
   guildSimulation.arrived=null;
@@ -46,14 +60,16 @@ function guildBenchmark(action) {
 function guildActor(p) {
   return {key:p.key,name:p.player?'You':p.name,host:p.host||'local',kind:p.player?'Player':p.kind,
     guildClass:p.guildClass||'Adventurer',height:p.height??2.10,
-    status:p.status||'idle',activity:p.activity,x:p.x,z:p.z,yaw:p.yaw,moving:p.moving,
+    status:p.status||'idle',activity:p.activity,hit:p.hit||0,x:p.x,z:p.z,yaw:p.yaw,moving:p.moving,
     parts:p.player?equippedPartKeys(p.loadout,poseFor(p)):undefined,
-    dancePhase:p.player&&p.activity==='dance'?animationPhase(p,guildSimulation.time):undefined};
+    posePhase:p.player&&['dance','wood','attack'].includes(p.activity)?animationPhase(p,guildSimulation.time):undefined};
 }
 function guildFrame(dt,keysJSON,yaw) {
   guildSimulation.step(dt,JSON.parse(keysJSON),yaw);
   const arrived=guildSimulation.arrived;
   guildSimulation.arrived=null;
+  const {entities,targetKey,message,hp,maxHp,logs,woodXp,combatXp,revision}=guildSimulation.adventure;
   return JSON.stringify({player:guildActor(guildSimulation.player),
+    adventure:{entities,targetKey,message,hp,maxHp,logs,woodXp,combatXp,revision},
     npcs:Array.from(guildSimulation.npcs.values(),guildActor),arrived,time:guildSimulation.time});
 }

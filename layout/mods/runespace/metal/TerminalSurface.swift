@@ -72,7 +72,7 @@ private struct FrameRequest: Decodable {
     let orbit, tilt, zoom, viewZoom, hudScale: Double?
     let walk, click, pointer: [Double]?
     let talk: String?
-    let home, nearest, cancel, names, dance: Bool?
+    let home, nearest, cancel, names, dance, inspect: Bool?
     let benchmark: String?
 }
 
@@ -100,7 +100,8 @@ final class TerminalSurface {
         try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
         let saved=object(at:shared)
         engine=try WorldEngine(bundle:assets.appendingPathComponent("engine.bundle.js"),
-                               saved:saved["runespace.worldPosition"] as? [String:Any] ?? [:])
+                               saved:saved["runespace.worldPosition"] as? [String:Any] ?? [:],
+                               adventureURL:home.appendingPathComponent("data/runespace-adventure.json"))
         engine.sync(saved)
         if let cam=saved["runespace.worldCamera"] as? [String:Double] {
             camera.restore(cam)
@@ -112,6 +113,7 @@ final class TerminalSurface {
         FileHandle.standardOutput.write(Data((json(object)+"\n").utf8))
     }
     func serve() {
+        defer { engine.flushAdventure() }
         send(["type":"ready","format":"rgba8","slots":4])
         while let input=readLine() {
             let done=autoreleasepool { () -> Bool in
@@ -170,7 +172,7 @@ final class TerminalSurface {
         if let p=point(r.walk) {engine.call("guildWalk",[p.x,p.y])}
         if let key=r.talk {engine.call("guildTalk",[key])}
         if let p=point(r.click) {
-            if let a=camera.pick(p,from:previous) {engine.call("guildTalk",[a.key])}
+            if let pick=camera.pick(p,from:previous) {engine.interact(pick)}
             else {let world=camera.ground(p);engine.call("guildWalk",[Double(world.x),Double(world.y)])}
         }
         let frame=try engine.step(dt,keys:keys,yaw:camera.yaw)
@@ -192,7 +194,7 @@ final class TerminalSurface {
         cb.commit();cb.waitUntilCompleted()
         guard cb.status == .completed else {throw cb.error ?? problem("Metal frame did not finish")}
         if r.names == true || hover != nil || close != nil {
-            labels.draw(frame:frame,camera:camera,target:hover ?? close,names:r.names == true,
+            labels.draw(frame:frame,camera:camera,target:hover ?? close.map(WorldPick.agent),names:r.names == true,
                         into:slot.buffer.contents(),width:w,height:h,hudScale:CGFloat(r.hudScale ?? 1))
         }
         let actors=frame.npcs.map { a -> [String:Any] in
@@ -201,10 +203,17 @@ final class TerminalSurface {
                     "activity":a.activity ?? "idle","status":a.status ?? "unknown","x":p.x,"y":p.y,"headY":head.y,
                     "worldX":a.x,"worldZ":a.z]
         }
-        send(["type":"frame","slot":n,"path":slot.file.path,"width":w,"height":h,"size":bytes,
+        var response: [String:Any] = ["type":"frame","slot":n,"path":slot.file.path,"width":w,"height":h,"size":bytes,
               "at":CACurrentMediaTime(),"x":frame.player.x,"z":frame.player.z,"yaw":camera.yaw,"zoom":camera.zoom,"pitch":camera.pitch,
-              "playerActivity":frame.player.activity ?? "idle","equipment":frame.player.parts ?? [],"dancePhase":frame.player.dancePhase as Any? ?? NSNull(),
+              "playerActivity":frame.player.activity ?? "idle","equipment":frame.player.parts ?? [],"dancePhase":(frame.player.activity == "dance" ? frame.player.posePhase : nil) as Any? ?? NSNull(),
               "agents":actors,"arrived":arrived as Any? ?? NSNull(),"visible":visible,
-              "hovered":hover?.key as Any? ?? NSNull(),"nearest":close?.key as Any? ?? NSNull()])
+              "hovered":hover?.key as Any? ?? NSNull(),"nearest":close?.key as Any? ?? NSNull()]
+        if let status = frame.adventure.status(hover:hover?.entity) {
+            response["adventureStatus"] = status.title + "  ·  " + status.detail
+        }
+        if r.inspect == true {
+            response["adventure"] = frame.adventure.report(camera:camera)
+        }
+        send(response)
     }
 }
