@@ -15,6 +15,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / 'layout'
 MOD = Path('mods/runespace')
+MUSIC_PANEL = Path('mods/runespace-music')
 LAYOUT = Path('layouts/runespace.json')
 METAL_OUTPUT = {'assets.json', 'engine.bundle.js'}
 HERDR_GENERATED = {'gpui-kit.d.ts', 'jsconfig.json'}
@@ -57,8 +58,8 @@ def restore_game_binding(existing, staged):
     staged.write_text(json.dumps(layout, indent=2, ensure_ascii=False) + '\n')
 
 
-def stage_files(stage):
-    mod_files = SOURCE / MOD
+def stage_mod(stage, mod):
+    mod_files = SOURCE / mod
     for source in sorted(mod_files.rglob('*')):
         relative = source.relative_to(mod_files)
         if not source.is_file() or any(p.startswith('.') or p == '__pycache__' for p in relative.parts):
@@ -66,9 +67,14 @@ def stage_files(stage):
         if (source.name in HERDR_GENERATED or source.suffix in {'.pyc', '.pyo'}
                 or (relative.parent == Path('metal') and source.name in METAL_OUTPUT)):
             continue
-        destination = stage / MOD / relative
+        destination = stage / mod / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
+
+
+def stage_files(stage):
+    for mod in (MUSIC_PANEL, MOD):
+        stage_mod(stage, mod)
     for relative in [LAYOUT, Path('layouts/runespace.svg'), Path('themes/runespace.json')]:
         destination = stage / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -110,13 +116,14 @@ def retire_legacy_music(app_home):
 def publish(stage, app_home):
     restore_game_binding(app_home / LAYOUT, stage / LAYOUT)
     # A fresh mod first becomes visible with all of its assets present.
-    mod_dir = app_home / MOD
-    if not mod_dir.exists():
-        mod_dir.parent.mkdir(parents=True, exist_ok=True)
-        (stage / MOD).rename(mod_dir)
+    for mod in (MUSIC_PANEL, MOD):
+        mod_dir = app_home / mod
+        if not mod_dir.exists():
+            mod_dir.parent.mkdir(parents=True, exist_ok=True)
+            (stage / mod).rename(mod_dir)
     # On updates replace individual files atomically and keep Herdr's own files.
     # Publish the manifest and layout after their dependencies are in place.
-    last = {MOD / 'mod.json': 1, LAYOUT: 2}
+    last = {MUSIC_PANEL / 'mod.json': 1, MOD / 'mod.json': 1, LAYOUT: 2}
     sources = [p for p in stage.rglob('*') if p.is_file()]
     for source in sorted(sources, key=lambda p: (last.get(p.relative_to(stage), 0), p)):
         target = app_home / source.relative_to(stage)

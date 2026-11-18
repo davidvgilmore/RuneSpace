@@ -49,7 +49,7 @@ Codex agents are mages, Claude agents are rangers, and Hermes is the guildmaster
 
 Open **Inventory** to change any of seven equipment slots. The 29 cosmetics include all six partyhat colours, dragon chainbody, Bandos tassets, abyssal whip, Elysian spirit shield and fire cape. The two-handed Armadyl godsword takes both hands.
 
-Press **M** in the world or click **Music** to open the official 43-track *RuneScape: Original Soundtrack Classics* album. Hit **Play** for *Scape Main*, or scroll to a favourite like *Harmony* or *Sea Shanty 2*. Minimize the player and the music keeps going while you walk or chat. Playback streams from Bandcamp and needs an internet connection. [Soundtrack and listening guide](layout/mods/runespace/music/README.md)
+Press **M** in the world or click **Music** in the Guild header to open the track list over your current view. Pick any of the 43 tracks from *RuneScape: Original Soundtrack Classics*, from *Scape Main* to *Sea Shanty 2*. Press **Esc** to return to the world or your chat. The track keeps playing. Open **Music** again to pause or change songs. Playback streams from Bandcamp and needs an internet connection. [Soundtrack and listening guide](layout/mods/runespace/music/README.md)
 
 ## Connecting OpenCode and Pi
 

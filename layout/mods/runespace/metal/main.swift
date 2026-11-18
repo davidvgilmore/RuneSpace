@@ -118,7 +118,10 @@ final class WorldWindow:NSObject,NSApplicationDelegate,NSWindowDelegate,MTKViewD
         return field
     }
     @objc func goBack(){end(kind:"back")}
-    func openMusic(){sendEvent(kind:"music")}
+    func openMusic(){
+        sendEvent(kind:"music")
+        if let pid=expectedHerdrPID {NSRunningApplication(processIdentifier:pid)?.activate(options:[])}
+    }
     @objc func toggleNames(){names.toggle();window.makeFirstResponder(view)}
     @objc func goHome(){engine.call("guildWalk",[0,10.5]);camera.restore([:]);window.makeFirstResponder(view)}
     func orbit(_ angle:Float){camera.yaw+=angle}

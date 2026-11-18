@@ -4,5 +4,5 @@ __pycache__/
 node_modules/
 layout/mods/runespace/metal/assets.json
 layout/mods/runespace/metal/engine.bundle.js
-layout/mods/runespace/gpui-kit.d.ts
-layout/mods/runespace/jsconfig.json
+layout/mods/*/gpui-kit.d.ts
+layout/mods/*/jsconfig.json

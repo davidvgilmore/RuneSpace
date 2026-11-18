@@ -1,6 +1,6 @@
 # RuneScape soundtrack
 
-Press **M** in the world or click **Music** in the Guild header. Choose a track in the Bandcamp player, or press **Play** to start with *Scape Main*. Minimize the music window or switch back to Herdr to keep listening while you walk or open a conversation. Close the music window to stop playback.
+Press **M** in the world or click **Music** in the Guild header. Select a song from the list to play it, or press **Play** to start with *Scape Main*. Press **Esc** to close the panel and keep listening while you walk or open a conversation. Reopen **Music** to see what’s playing, choose another track, or pause. You can browse the full track list offline.
 
 The player streams *RuneScape: Original Soundtrack Classics*, the 43-track collection released by Jagex and Laced Records in 2018. Playback requires an internet connection. The recordings are credited to Jagex and hosted on Bandcamp. [Official album](https://runescape-ost.bandcamp.com/album/runescape-original-soundtrack-classics) · [Laced Records track list and credits](https://www.lacedrecords.com/products/runescape-original-soundtrack-classics-double-cd-digital-download)
 
