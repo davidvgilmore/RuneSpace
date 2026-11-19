@@ -6,15 +6,17 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocket, WebSocketServer } from 'ws';
 import { AccessToken, TrackSource } from 'livekit-server-sdk';
+import { normalizeLoadout } from '../layout/mods/runespace/equipment.js';
 import { Simulation } from '../layout/mods/runespace/world-engine.js';
-import { readRoster } from './agents.mjs';
+import { readRosterViews } from './agents.mjs';
+import { createHostActions } from './host-actions.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const worldFiles = resolve(here, '../layout/mods/runespace');
 const sdkDirectory = dirname(createRequire(import.meta.url).resolve('livekit-client'));
 const files = new Map([
   ['/', [join(here, 'index.html'), 'text/html']],
-  ...['style.css', 'client.js', 'media.js', 'world.js'].map(name => [
+  ...['style.css', 'client.js', 'media.js', 'world.js', 'adventure-profile.js', 'host-ui.js'].map(name => [
     '/' + name, [join(here, name), name.endsWith('.css') ? 'text/css' : 'text/javascript']
   ]),
   ...['world-engine.js', 'world-art.js', 'equipment.js'].map(name => [
@@ -59,6 +61,8 @@ export function settings(env = process.env) {
   return {
     host: env.RUNESPACE_HOST || '127.0.0.1', port: Number(env.RUNESPACE_PORT ?? 8787),
     origin: env.RUNESPACE_ORIGIN, invite: env.RUNESPACE_INVITE, agentRoster: env.RUNESPACE_AGENT_ROSTER,
+    desktop: env.RUNESPACE_OWNER_TOKEN || env.RUNESPACE_HERDR_CLI || env.RUNESPACE_HERDR_MOD
+      ? {token: env.RUNESPACE_OWNER_TOKEN, cli: env.RUNESPACE_HERDR_CLI, mod: env.RUNESPACE_HERDR_MOD} : null,
     livekit: rawMedia.every(Boolean) ? { url: rawMedia[0], apiKey: rawMedia[1], apiSecret: rawMedia[2] } : null
   };
 }
@@ -69,6 +73,7 @@ export function createRoomServer(options = {}) {
   const invite = options.invite || secret();
   if (invite.length < 16 || invite.length > 512) throw new Error('Use an invitation of 16–512 characters.');
   const inviteHash = digest(invite);
+  const desktop = createHostActions(options.desktop, invite, agentRoster);
   let configuredOrigin;
   if (options.origin) {
     const url = new URL(options.origin);
@@ -91,7 +96,7 @@ export function createRoomServer(options = {}) {
   server.headersTimeout = 10_000;
   server.requestTimeout = 10_000;
   let origin, broadcastTimer, maintenance, refreshTimer, readingRoster = false, stopping = false;
-  let agents = [];
+  let agentViews = {guests: [], owner: []};
   const allowedOrigin = value => configuredOrigin ? value === configuredOrigin : [
     'http://127.0.0.1:', 'http://localhost:', 'http://[::1]:'
   ].some(base => value === base + server.address()?.port);
@@ -100,7 +105,7 @@ export function createRoomServer(options = {}) {
     const ws = session.socket;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     if (ws.bufferedAmount > 256 * 1024) { ws.terminate(); return; }
-    ws.send(JSON.stringify({ type: 'world', self: session.peer.id, peers, agents }));
+    ws.send(JSON.stringify({ type: 'world', self: session.peer.id, peers, agents: session.isOwner ? agentViews.owner : agentViews.guests }));
   }
   function publish() {
     if (broadcastTimer || stopping) return;
@@ -115,10 +120,10 @@ export function createRoomServer(options = {}) {
     if (!agentRoster || readingRoster || stopping) return;
     readingRoster = true;
     try {
-      const next = (await readRoster(agentRoster)).slice(0, 100).map(({ id, kind, name, status }) => ({ id, kind, name, status }));
-      if (JSON.stringify(next) !== JSON.stringify(agents)) { agents = next; publish(); }
+      const next = await readRosterViews(agentRoster, desktop?.mod);
+      if (JSON.stringify(next) !== JSON.stringify(agentViews)) { agentViews = next; publish(); }
     } catch {
-      if (agents.length) { agents = []; publish(); }
+      if (agentViews.guests.length) { agentViews = {guests: [], owner: []}; publish(); }
     } finally { readingRoster = false; }
   }
 
@@ -148,6 +153,10 @@ export function createRoomServer(options = {}) {
     // Accumulate a distance budget by elapsed time. The cap allows jitter without permitting stored-up teleports.
     session.budget = Math.min(1.6, session.budget + (now-session.lastMove) * .0055);
     session.lastMove = now;
+    // A defeated adventurer returns only to the commons spawn.
+    if (input.recover === true && input.x === 0 && input.z === 12) {
+      peer.x = 0; peer.z = 12;
+    }
     const dx = input.x - peer.x, dz = input.z - peer.z, length = Math.hypot(dx, dz);
     if (Number.isFinite(length) && length > 0) {
       const fraction = Math.min(1, session.budget / length);
@@ -157,6 +166,8 @@ export function createRoomServer(options = {}) {
         Object.assign(peer, next);
       }
     }
+    if (['idle', 'wood', 'attack', 'dance'].includes(input.activity)) peer.activity = input.activity;
+    if (input.loadout && typeof input.loadout === 'object') peer.loadout = normalizeLoadout(input.loadout);
     peer.seq = input.seq;
     peer.yaw = normalizeAngle(input.yaw);
     publish();
@@ -181,10 +192,10 @@ export function createRoomServer(options = {}) {
         res.once('close', () => stream.destroy());
         return;
       }
-      if (req.method !== 'POST' || !['/api/join', '/api/media', '/api/leave'].includes(path)) throw fail(404, 'Not found.');
+      if (req.method !== 'POST' || !['/api/join', '/api/media', '/api/leave', '/api/agent-chat', '/api/herdr-world'].includes(path)) throw fail(404, 'Not found.');
       if (!allowedOrigin(req.headers.origin)) throw fail(403, 'Unexpected request origin.');
       if (path === '/api/join') {
-        const { invite: invitation, name } = await body(req);
+        const { invite: invitation, name, owner } = await body(req);
         if (typeof invitation !== 'string' || !timingSafeEqual(digest(invitation), inviteHash)) throw fail(403, 'Invalid invitation.');
         if (typeof name !== 'string' || !name.trim() || [...name.trim()].length > 32 || /[\p{Cc}\p{Cf}]/u.test(name)) throw fail(400, 'Enter a display name of 1–32 characters.');
         if (sessions.size >= capacity) {
@@ -193,8 +204,9 @@ export function createRoomServer(options = {}) {
         }
         const token = secret();
         const peer = spawn(name.trim());
-        sessions.set(token, { peer, socket: null, expires: Date.now()+resumeMs, budget: 1, lastMove: performance.now() });
-        return reply(res, 201, { id: peer.id, session: token, media: Boolean(livekit) });
+        const isOwner = desktop?.authenticates(owner) === true;
+        sessions.set(token, { peer, isOwner, socket: null, expires: Date.now()+resumeMs, budget: 1, lastMove: performance.now() });
+        return reply(res, 201, { id: peer.id, session: token, media: Boolean(livekit), canOpenChats: isOwner && Boolean(agentRoster), canOpenWorld: isOwner });
       }
       const auth = req.headers.authorization;
       const token = auth?.startsWith('Bearer ') ? auth.slice(7) : '';
@@ -205,6 +217,13 @@ export function createRoomServer(options = {}) {
         session.socket?.close(1000, 'Left the guild');
         publish();
         return reply(res, 200, { ok: true });
+      }
+      if (path === '/api/agent-chat' || path === '/api/herdr-world') {
+        if (!session.isOwner) throw fail(403, 'Desktop conversations and the personal guild belong to the host.');
+        if (!session.socket) throw fail(409, 'Reconnect to the team guild to open Herdr.');
+        if (path === '/api/agent-chat') await desktop.openChat((await body(req)).id);
+        else await desktop.openWorld();
+        return reply(res, 200, {ok: true});
       }
       if (!livekit) throw fail(503, 'Voice and video are unavailable in this guild.');
       if (!session.socket) throw fail(409, 'Connect to the guild before joining voice or video.');

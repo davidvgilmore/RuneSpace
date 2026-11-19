@@ -35,7 +35,7 @@ The installer builds the world and places the mod, theme and layout in your Herd
 
 ## Team guild
 
-Open **Team guild** in Herdr to meet other people in the browser version of the guild. Teammates can follow an invite link, choose a name and walk up to each other for proximity voice and video. Mic and camera start off. The host can include the desktop’s working agents as read-only characters. Teammates only need a browser and network access to the host. [Host a team guild with LiveKit](collaboration/README.md)
+Open **Team guild** in Herdr to meet other people in the browser version of the guild. Teammates can follow an invite link, choose a name and walk up to each other for proximity voice and video. Mic and camera start off. The host can include working agents, open their conversations on the Herdr desktop, and bring up the personal guild while a call stays connected. Guests see each agent’s class and work status. Click an oak to chop, or a goblin or giant rat to fight. Press **I** for inventory. Teammates only need a browser and network access to the host. [Host a team guild with LiveKit](collaboration/README.md)
 
 ## Around town
 

@@ -56,7 +56,9 @@ Use a host that stays awake while the team is meeting. Each joining device needs
 
 5. Open the guild URL with `/#invite=YOUR_RANDOM_GUILD_INVITE` appended. Join by name and turn on **Mic** or **Camera** when you want to talk. An approaching teammate appears within six world units and drops out beyond eight. **Leave guild** disconnects the session and releases its devices. Rotating the invite and restarting the room service requires people to join again with the new link.
 
-The app has room for 32 humans. Its optional agent roster shows local harness classes and work status using generated character names. Agent conversations, terminals, commands and working directories stay on the desktop. Walking and voice work independently, so people can join with both devices off.
+To run just LiveKit on a separate Google VM, keep this room service on the desktop and point its `LIVEKIT_URL` at the VM. [Install the dedicated private media host](deploy/README.md)
+
+The app has room for 32 humans. Its optional agent roster shows local harness classes and work status using generated character names. Agent conversations, terminals, commands and working directories stay on the desktop. Click either oak near the market to chop wood or click the rat or goblin to battle. Walking away ends the action. **I** opens your pack and equipment. Logs, XP, gear and regrowth are saved for that named character in the current browser. Teammates can see each other's outfits and action animations. Walking and voice work independently, so people can join with both devices off.
 
 To use another LiveKit deployment, set the three `LIVEKIT_*` values to its credentials and secure WebSocket endpoint. For your own public network deployment, plan for ICE and TURN in addition to HTTPS signaling. [LiveKit ports and firewall](https://docs.livekit.io/transport/self-hosting/ports-firewall/)
 
@@ -67,5 +69,9 @@ Create `~/.config/herdr-app/data/runespace-team.json` (or the same path under `H
 ```json
 {"url":"https://YOUR-HOST.YOUR-TAILNET.ts.net:8465/#invite=YOUR_RANDOM_GUILD_INVITE"}
 ```
+
+For the host's desktop controls, add `RUNESPACE_OWNER_TOKEN` (a separate random value of at least 32 characters), `RUNESPACE_HERDR_CLI` (the absolute path from `command -v herdr-app`), and `RUNESPACE_HERDR_MOD` (the active guild layout, typically `runespace`) to the room service environment. Enable the agent roster to open chats. Add `&owner=YOUR_OWNER_TOKEN` to the URL in the private desktop file. Use **Invite** in the browser for teammates. It copies only the guest invite.
+
+Click an agent in the host's guild list or walk up to one in the world to open its conversation in Herdr. **Personal guild ↗** opens the complete desktop game while the browser call continues. Invited teammates see agent roles and work status; private thread titles and desktop controls are available to the host.
 
 Click **Team guild** in the RuneSpace header. It opens the browser world where your teammates are. The desktop's **Guild world** opens the personal game and agent conversations.

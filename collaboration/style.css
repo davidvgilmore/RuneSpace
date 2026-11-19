@@ -606,3 +606,91 @@ dialog input {
     transition: none !important;
   }
 }
+
+button.world-tag {
+  pointer-events: auto;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+button.world-tag.adventure {
+  background: #262b20da;
+  color: #f2dfa4;
+  border-color: #8b7953;
+}
+button.world-tag.adventure:hover,
+button.world-tag.agent:hover {
+  border-color: #f2d28b;
+}
+.world-tag.hit {
+  background: #972e22;
+  border: 2px solid #461810;
+  color: #fff2d6;
+  border-radius: 40%;
+  font-weight: bold;
+}
+#adventure-note:not(:empty) {
+  margin: 7px 4px 1px;
+  max-width: min(360px, 75vw);
+  color: var(--gold);
+  font-size: 13px;
+}
+#pack-dialog {
+  max-height: 85dvh;
+  overflow: auto;
+}
+.pack-stats {
+  margin: 8px 0 16px;
+}
+#pack-gear {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+}
+#pack-gear label {
+  display: grid;
+  gap: 3px;
+  font-size: 12px;
+  color: var(--gold);
+}
+#pack-gear select {
+  min-width: 0;
+  color: var(--ink);
+  background: #33372b;
+  border: 1px solid var(--edge);
+  padding: 5px;
+}
+@media (max-width: 460px) {
+  .topbar {
+    gap: 6px;
+  }
+  .topbar h1,
+  .title-divider {
+    display: none;
+  }
+}
+
+.roster button.agent-chat {
+  min-width: 0;
+  padding: 2px 0;
+  overflow: hidden;
+  color: #f7e8bb;
+  background: transparent;
+  border: 0;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.roster button.agent-chat:hover,
+.roster button.agent-chat:focus-visible {
+  color: #ffe495;
+  text-decoration: underline;
+}
+
+.world-recovery {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}

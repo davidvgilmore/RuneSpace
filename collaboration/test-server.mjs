@@ -142,3 +142,88 @@ test('partial media configuration and unspecified remote origins fail visibly', 
   assert.throws(() => createRoomServer({ host: '0.0.0.0' }), /ORIGIN/);
   assert.throws(() => createRoomServer({ origin:'https://room.test', livekit:{url:'ws://media.test'} }), /wss:/);
 });
+
+test('only the owner opens a current desktop target and receives its private display title', async t => {
+  const {mkdtemp, rm, writeFile} = await import('node:fs/promises');
+  const {tmpdir} = await import('node:os');
+  const {join} = await import('node:path');
+  const folder = await mkdtemp(join(tmpdir(), 'guild-host-test-'));
+  t.after(() => rm(folder, {recursive:true, force:true}));
+  const file = join(folder, 'shared.json');
+  const privateKey = 'm4:private-conversation-123';
+  const src = {kind:'Codex', status:'working', key:privateKey, name:'Review the maze', cwd:'/secret/project'};
+  const roster = {'guild.snapshot':{at:Date.now()/1000, agents:[src,
+    {...src,key:'another-private-session',name:'Fix /secret/project'},
+    {...src,key:'private-key-2',name:'Review private-key-2'}]},
+    'runespace.snapshot':{at:Date.now()/1000, agents:[{...src, key:'wrong-layout'}]}};
+  await writeFile(file, JSON.stringify(roster));
+  const token = randomBytes(32).toString('hex');
+  const calls = [];
+  const desktop = {token, cli:'/app/herdr-app', mod:'guild-hall', run:async (cli,args) => {
+    calls.push({cli,args});
+    return {stdout:JSON.stringify(args[0] === 'status' ? {layout:'guild-hall'} : {ok:true})};
+  }};
+  const {post, connect, origin} = await fixture(t, {desktop, agentRoster:file});
+  const login = async owner => (await post('/api/join', {name:'Adventurer',invite:invitation,owner})).json();
+  const guest = await login(invitation), owner = await login(token);
+  assert.equal(guest.canOpenChats, false);
+  assert.equal(guest.canOpenWorld, false);
+  assert.equal(owner.canOpenChats, true);
+  assert.equal(owner.canOpenWorld, true);
+  assert.equal((await post('/api/herdr-world', {}, owner.session)).status,409);
+  const guestConnection = await connect(guest.session), ownerConnection = await connect(owner.session);
+  const [g,o] = await Promise.all([guestConnection.state(s=>s.agents.length),ownerConnection.state(s=>s.agents.length)]);
+  assert.ok(g.agents.every(a=>Object.keys(a).sort().join() === 'id,kind,name,status'));
+  const titled = o.agents.filter(a=>a.chatTitle);
+  assert.equal(titled.length, 1);
+  assert.equal(titled[0].chatTitle, 'Review the maze');
+  for (const s of [g,o]) {
+    for (const raw of [privateKey,'another-private-session','private-key-2','/secret','wrong-layout']) assert.ok(!JSON.stringify(s).includes(raw));
+  }
+  const id = titled[0].id;
+  const chat = (s,target=id) => post('/api/agent-chat', {id:target}, s);
+  assert.equal((await post('/api/herdr-world',{},guest.session)).status,403);
+  assert.equal((await chat(guest.session)).status,403);
+  assert.equal((await chat(owner.session,privateKey)).status,404);
+  assert.equal((await fetch(origin+'/api/herdr-world',{method:'POST',headers:{Authorization:'Bearer '+owner.session,Origin:'https://other.example'}})).status,403);
+  assert.equal(calls.length,0);
+  assert.equal((await chat(owner.session)).status,200);
+  assert.equal((await post('/api/herdr-world',{},owner.session)).status,200);
+  assert.deepEqual(calls.filter(c=>c.args[0]==='do').map(c=>c.args),[
+    ['do', 'guild-hall.select:'+privateKey], ['do','guild-hall.world']]);
+  if (process.platform === 'darwin') assert.equal(calls.filter(c=>c.cli==='/usr/bin/open').length,2);
+  delete roster['guild.snapshot'];
+  await writeFile(file, JSON.stringify(roster));
+  assert.equal((await chat(owner.session)).status,404);
+  assert.equal((await post('/api/leave',{},owner.session)).status,200);
+  assert.equal((await post('/api/herdr-world',{},owner.session)).status,401);
+});
+
+test('host capability configuration requires a distinct owner secret and an absolute Herdr CLI path', () => {
+  const token=randomBytes(32).toString('hex');
+  const desktop={token,cli:'/app/herdr-app',mod:'runespace'};
+  assert.throws(()=>createRoomServer({invite:token,desktop}), /separate random/);
+  assert.throws(()=>createRoomServer({desktop:{...desktop,cli:'untrusted'}}), /absolute/);
+  assert.throws(()=>createRoomServer({desktop:{...desktop,mod:'arbitrary-command'}}), /HERDR_MOD/);
+});
+
+test('guildmates see woodcutting, combat and approved equipment when the player stands still', async t => {
+  const {join, connect} = await fixture(t);
+  const player = await join('Mage'), friend = await join('Ranger');
+  const a = await connect(player.session), b = await connect(friend.session);
+  const first = await a.state(s => s.peers.length === 2);
+  const avatar = first.peers.find(peer => peer.id === player.id);
+  function move(seq, activity, loadout) {
+    a.ws.send(JSON.stringify({type:'move', x:avatar.x, z:avatar.z, yaw:0, seq, activity, loadout}));
+    return b.state(s => s.peers.some(p => p.id === player.id && p.seq === seq))
+      .then(s => s.peers.find(p => p.id === player.id));
+  }
+  assert.equal((await move(1, 'wood')).activity, 'wood');
+  const combat = await move(2, 'attack', {weapon:'armadyl-godsword',shield:'dragonfire-shield',extra:'untrusted'});
+  assert.equal(combat.activity, 'attack');
+  assert.equal(combat.loadout.weapon, 'armadyl-godsword');
+  assert.equal(combat.loadout.shield, 'none');
+  assert.ok(!Object.hasOwn(combat.loadout,'extra'));
+  assert.equal((await move(3, 'unknown')).activity,'attack');
+  assert.equal((await move(4, 'idle')).activity,'idle');
+});

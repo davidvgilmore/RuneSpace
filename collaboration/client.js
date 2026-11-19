@@ -1,5 +1,8 @@
+import {EQUIPMENT_ITEMS,EQUIPMENT_SLOTS} from '/world/equipment.js';
 import {createGuildWorld} from './world.js';
 import {createGuildMedia,nearbyIdentities} from './media.js';
+
+import {createHerdrActions, readHostEntry, teamInvite} from './host-ui.js';
 
 const $=id=>document.getElementById(id);
 const sessionKey='runespace.team.session';
@@ -12,15 +15,20 @@ function inviteFrom(text) {
   }
   return trimmed;
 }
-let invite=new URLSearchParams(location.hash.slice(1)).get('invite')||'';
+const entry=readHostEntry(new URL(location.href),{getItem:saved,setItem:remember});
+let invite=entry.invite;
+if(entry.hadOwner)history.replaceState(null,'',entry.clean);
 $('invite-field').hidden=!!invite;
 $('name').value=saved('runespace.team.name')||'';
 let credentials=null,socket=null,joining=false,attempt=0,retryTimer,sessionEpoch=0;
 let nearby=new Set(),lastList='',mediaStarting=false,mediaActive=false,toastTimer,mediaEpoch=0;
 function toast(message){$('toast').textContent=message;clearTimeout(toastTimer);toastTimer=setTimeout(()=>{$('toast').textContent='';},3200);}
 function status(message,state){$('connection').textContent=message;$('connection').dataset.state=state;}
+const herdr=createHerdrActions({session:()=>credentials,post,toast});
+$('herdr-world').addEventListener('click',()=>herdr.world());
 function worldVisible(inWorld){
-  $('gate').hidden=inWorld;$('leave').hidden=!inWorld;$('dock').hidden=!inWorld;
+  $('herdr-world').hidden=!(inWorld&&credentials?.canOpenWorld);
+  $('pack').hidden=!inWorld;$('gate').hidden=inWorld;$('leave').hidden=!inWorld;$('dock').hidden=!inWorld;
   $('roster').hidden=!inWorld;$('roster-toggle').hidden=!inWorld;$('invite').disabled=!invite;
 }
 function mediaStatus(message){
@@ -30,7 +38,34 @@ function mediaStatus(message){
 const media=createGuildMedia({tiles:$('media-tiles'),micButton:$('mic'),cameraButton:$('camera'),soundButton:$('sound'),onStatus:mediaStatus});
 const world=createGuildWorld({canvas:$('world'),labels:$('labels'),onMove(move){
   if(socket?.readyState===WebSocket.OPEN)socket.send(JSON.stringify({type:'move',...move}));
-},onInspect:toast});
+},onAgent:agent=>herdr.chat(agent),onInspect:toast,onInventory:openPack,onAdventure(progress){
+  $('adventure-note').textContent=progress.message;
+  $('pack-hp').textContent=progress.hp+' / '+progress.maxHp;
+  $('pack-logs').textContent=progress.logs;
+  $('pack-wood').textContent=progress.woodXp+' XP';
+  $('pack-combat').textContent=progress.combatXp+' XP';
+}});
+function openPack(){
+  if(!credentials||!$('gate').hidden)return;
+  const slots=$('pack-gear');
+  if(!slots.children.length){
+    for(const slot of EQUIPMENT_SLOTS){
+      const label=document.createElement('label'),select=document.createElement('select');
+      label.textContent=slot.label;select.name=slot.id;select.setAttribute('aria-label',slot.label);
+      select.append(new Option('Empty','none'));
+      for(const item of EQUIPMENT_ITEMS.filter(item=>item.slot===slot.id))select.append(new Option(item.name,item.id));
+      select.addEventListener('change',()=>{
+        const gear=world.equip(slot.id,select.value);
+        for(const field of slots.querySelectorAll('select'))field.value=gear[field.name];
+      });
+      label.append(select);slots.append(label);
+    }
+  }
+  const gear=world.getLoadout();
+  for(const field of slots.querySelectorAll('select'))field.value=gear[field.name];
+  $('pack-dialog').showModal();
+}
+$('pack').addEventListener('click',openPack);
 
 async function post(path,body,session){
   const headers={};if(body!==undefined)headers['Content-Type']='application/json';if(session)headers.Authorization='Bearer '+session;
@@ -64,12 +99,22 @@ function showWorld(message){
   const peers=message.peers,agents=message.agents||[];
   nearby=nearbyIdentities(me,peers,nearby);media.setPositions(me,peers);
   const humans=peers.map(p=>[p.name,p.id===me.id?'You':nearby.has(p.id)?'Nearby':'In world']);
-  const npcs=agents.map(a=>[a.name,a.status==='working'?'Working':'Idle']);
+  const npcs=agents.map(a=>[a.chatTitle||a.name,a.status==='working'?'Working':'Idle',a.id]);
   const stamp=JSON.stringify([humans,npcs]);
   if(stamp!==lastList){
     $('peer-count').textContent=peers.length;$('agent-count').textContent=agents.length;
     $('peer-list').replaceChildren(...humans.map(pair=>row(...pair)));
-    $('agent-list').replaceChildren(...npcs.map(pair=>row(...pair)));$('agent-section').hidden=!agents.length;lastList=stamp;
+    $('agent-list').replaceChildren(...agents.map((agent,i)=>{
+      const [name,detail]=npcs[i],li=row(name,detail);
+      if(credentials.canOpenChats){
+        const link=document.createElement('button');link.type='button';link.className='agent-chat';
+        link.textContent=name;link.title='Open conversation in Herdr · '+agent.name;
+        link.setAttribute('aria-label','Open conversation in Herdr: '+name);
+        link.addEventListener('click',()=>herdr.chat(agent));
+        li.children[1].replaceWith(link);
+      }
+      return li;
+    }));$('agent-section').hidden=!agents.length;lastList=stamp;
   }
   if(opening){
     $('world').focus({preventScroll:true});
@@ -108,7 +153,7 @@ $('join-form').addEventListener('submit',async event=>{
   if(!name||!code){$('gate-feedback').textContent='Enter your name and a guild invite.';return;}
   joining=true;$('join').disabled=true;$('gate-feedback').textContent='Entering the guild…';
   try{
-    const joined=await post('/api/join',{name,invite:code});invite=code;remember('runespace.team.name',name);
+    const joined=await post('/api/join',{name,invite:code,...(entry.owner&&code===entry.invite?{owner:entry.owner}:{})});invite=code;remember('runespace.team.name',name);
     credentials=joined;remember(sessionKey,JSON.stringify({credentials:joined,invite:code}));++sessionEpoch;
     const url=new URL(location.href);url.hash=new URLSearchParams({invite}).toString();history.replaceState(null,'',url);
     $('invite-field').hidden=true;connectPresence();
@@ -123,8 +168,7 @@ $('roster-toggle').addEventListener('click',()=>{
   const shown=$('roster').classList.toggle('expanded');$('roster-toggle').setAttribute('aria-expanded',String(shown));
 });
 $('invite').addEventListener('click',()=>{
-  const url=new URL(location.pathname,location.origin);url.hash=new URLSearchParams({invite}).toString();
-  $('invite-link').value=url.href;$('invite-dialog').showModal();$('invite-link').select();
+  $('invite-link').value=teamInvite(new URL(location.href),invite);$('invite-dialog').showModal();$('invite-link').select();
 });
 $('copy-link').addEventListener('click',async()=>{
   try{await navigator.clipboard.writeText($('invite-link').value);$('invite-dialog').close();toast('Guild invite copied.');}
@@ -135,7 +179,7 @@ window.addEventListener('pagehide',()=>{if(socket){socket.onclose=null;socket.cl
 window.addEventListener('pageshow',e=>{if(e.persisted&&credentials){mediaActive=false;connectPresence();if(credentials.media)void startMedia();}});
 try{
   const previous=JSON.parse(saved(sessionKey)||'null');
-  if(previous?.credentials?.session&&previous.invite===invite){
+  if(previous?.credentials?.session&&previous.invite===invite&&(!entry.hadOwner||previous.credentials.canOpenChats)){
     credentials=previous.credentials;++sessionEpoch;$('gate-feedback').textContent='Returning to the guild…';connectPresence();
   }
 }catch{remember(sessionKey,null);}
