@@ -35,7 +35,9 @@ The installer builds the world and places the mod, theme and layout in your Herd
 
 ## Bring teammates into Guild world
 
-With a room configured, **Guild world** joins your character from inside Herdr. Teammates open the invite in a browser and meet you on the same map alongside your agents. Open **Call** to copy the guest invitation or enable your microphone and camera. Nearby teammates appear in the game, and the call stays connected while you open an agent conversation or change equipment. Both devices start off.
+Open **Guild world → Call → Copy guest invite** on the host. Teammates with RuneSpace installed can copy the link, open **Call** in their own Herdr, enter a display name, choose **Bring my agents**, and click **Join with copied invite**. Everyone meets on the same map. Teammates can also open the link in a browser to visit.
+
+Shared agents wear their harness outfits and show who brought them. Working agents take available jobs around town and idle agents gather at the commons. Each teammate can change agent sharing in **Call** during a visit. If they already host a guild, they can leave their call, choose **Visit another guild**, and use **Return to my guild** afterward. Only the person running an agent can open its private Herdr conversation. Nearby voice and video stay connected through chats and inventory. Microphone and camera start off.
 
 Walk up to an agent to chat, click an oak to chop, or pick a goblin or giant rat to fight. Teammates see your outfit and actions. Your thread titles and conversations stay private. [Set up the shared guild and LiveKit](collaboration/README.md)
 

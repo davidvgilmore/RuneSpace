@@ -51,7 +51,7 @@ final class WorldLabels {
     }
 
     func draw(frame: GuildFrame, camera: GPUCamera, target: WorldPick?, names: Bool, into pixels: UnsafeMutableRawPointer, width: Int, height: Int, hudScale: CGFloat = 1) {
-        guard names || target != nil || !frame.humans.isEmpty else { return }
+        guard names || target != nil || !frame.humans.isEmpty || !frame.visitors.isEmpty else { return }
         let scale = max(0.25,min(8,hudScale))
         if scale != rasterScale {
             rasterScale = scale
@@ -64,6 +64,9 @@ final class WorldLabels {
             switch pick {
             case .agent(let actor):
                 name = (highlighted ? actor.guildClass + " · " : "") + (actor.name ?? actor.key)
+                anchor = camera.screen(actor.x,actor.elevation+actor.height,actor.z)
+            case .visitor(let actor):
+                name = (actor.ownerName ?? "Teammate") + " · " + (actor.name ?? actor.guildClass)
                 anchor = camera.screen(actor.x,actor.elevation+actor.height,actor.z)
             case .human(let actor):
                 name = (actor.name ?? "Teammate") + " · Teammate"
@@ -114,6 +117,10 @@ final class WorldLabels {
         }
         if let target { paint(target,highlighted:true) }
         for human in frame.humans where human.key != target?.key { paint(.human(human), highlighted:false) }
+        for actor in frame.visitors where actor.key != target?.key &&
+            (names || hypot(actor.x-frame.player.x,actor.z-frame.player.z) < 3.2) {
+            paint(.visitor(actor),highlighted:false)
+        }
         if names {
             for actor in frame.npcs where actor.key != target?.key { paint(.agent(actor),highlighted:false) }
         }

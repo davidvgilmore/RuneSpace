@@ -1,6 +1,10 @@
 // These functions run inside the mod's native game window via JavaScriptCore.
 let guildSimulation;
 const guildPeers = new Map();
+const visitingWorkers = new Map();
+let localStations = new Map();
+let localRoster = [];
+let localRosterStale = false;
 
 function guildTeamSync(encoded, self) {
   const present = new Set();
@@ -26,18 +30,69 @@ function guildTeamSync(encoded, self) {
   for (const id of guildPeers.keys()) if (!present.has(id)) guildPeers.delete(id);
 }
 
+// Use the same short interpolation for other players and their working companions.
+function advanceGuildPose(actor, target, dt) {
+  const dx=target.x-actor.x, dz=target.z-actor.z;
+  const distance=Math.hypot(dx,dz);
+  const blend=distance>4 ? 1 : -Math.expm1(-18*dt);
+  actor.x+=dx*blend;
+  actor.z+=dz*blend;
+  const turn=target.yaw-actor.yaw;
+  actor.yaw+=Math.atan2(Math.sin(turn),Math.cos(turn))*blend;
+  return distance>.035 && distance<=4;
+}
+
 function guildTeamFrame(dt) {
   return Array.from(guildPeers.values(), p => {
-    const dx = p.tx - p.x, dz = p.tz - p.z;
-    const distance = Math.hypot(dx, dz);
-    const blend = distance > 4 ? 1 : -Math.expm1(-18 * dt);
-    p.x += dx * blend;
-    p.z += dz * blend;
-    const turn = p.tyaw - p.yaw;
-    p.yaw += Math.atan2(Math.sin(turn), Math.cos(turn)) * blend;
-    p.moving = p.activity === 'idle' && (distance > 0.035 && distance <= 4 || p.walkUntil > guildSimulation.time);
-    return {...guildActor(p), name:p.name, kind:'Teammate'};
+    const moving=advanceGuildPose(p,{x:p.tx,z:p.tz,yaw:p.tyaw},dt);
+    p.moving=p.activity==='idle' && (moving || p.walkUntil>guildSimulation.time);
+    return {...guildActor(p),name:p.name,kind:'Teammate'};
   });
+}
+
+function guildAgentsSync(encoded) {
+  const present=new Set();
+  for (const agent of JSON.parse(encoded)) {
+    if (!agent.id || ![agent.x,agent.z,agent.yaw].every(Number.isFinite)) continue;
+    present.add(agent.id);
+    let actor=visitingWorkers.get(agent.id);
+    if (!actor) {
+      actor={key:'visitor:'+agent.id,x:agent.x,z:agent.z,yaw:agent.yaw,host:'remote'};
+      visitingWorkers.set(agent.id,actor);
+    }
+    Object.assign(actor,{name:agent.name,ownerName:agent.ownerName,kind:agent.kind,
+      guildClass:classFor(agent.kind),height:heightFor(agent.kind),status:agent.status,activity:agent.activity,target:agent});
+  }
+  for (const id of visitingWorkers.keys()) if (!present.has(id)) visitingWorkers.delete(id);
+}
+
+function visitingFrame(dt) {
+  return Array.from(visitingWorkers.values(), actor => {
+    const moving=advanceGuildPose(actor,actor.target,dt);
+    actor.moving=moving || actor.target.moving===true;
+    return {...guildActor(actor),ownerName:actor.ownerName};
+  });
+}
+
+function guildStationsSync(encoded) {
+  const next=new Map();
+  for (const pose of JSON.parse(encoded)) {
+    if (pose.key && [pose.x,pose.z,pose.yaw].every(Number.isFinite)) next.set(pose.key,pose);
+  }
+  let released=false;
+  for (const key of localStations.keys()) {
+    const actor=guildSimulation.npcs.get(key);
+    if (actor && !next.has(key)) {
+      actor.dest=null;
+      delete actor.sharedYaw;
+      released=true;
+    }
+  }
+  if (released) {
+    guildSimulation.revision=null;
+    guildSimulation.sync(localRoster,localRosterStale);
+  }
+  localStations=next;
 }
 
 function guildVisit(x, z) {
@@ -57,6 +112,7 @@ function guildEquipment(encoded){
 }
 function guildInit(savedPositionJSON,adventureJSON) {
   guildPeers.clear();
+  visitingWorkers.clear(); localStations.clear(); localRoster=[]; localRosterStale=false;
   guildSimulation=new Simulation();
   guildEquipment('{}');
   guildSimulation.restoreAdventure(readAdventureJSON(adventureJSON));
@@ -67,7 +123,9 @@ function guildInit(savedPositionJSON,adventureJSON) {
   }
 }
 function guildSync(agentsJSON,stale) {
-  guildSimulation.sync(JSON.parse(agentsJSON),stale);
+  localRoster=JSON.parse(agentsJSON);
+  localRosterStale=stale;
+  guildSimulation.sync(localRoster,stale);
 }
 function guildWalk(x,z) {return guildSimulation.walk({x,z});}
 function guildTalk(key) {return guildSimulation.approach(key);}
@@ -119,12 +177,28 @@ function guildActor(p) {
     posePhase:p.player&&['dance','wood','attack'].includes(p.activity)?animationPhase(p,guildSimulation.time):undefined};
 }
 function guildFrame(dt,keysJSON,yaw) {
+  // Hold shared workers at their last visible position while local picking tests proximity.
+  for (const key of localStations.keys()) {
+    const actor=guildSimulation.npcs.get(key);
+    if (actor) actor.path.length=0;
+  }
   guildSimulation.step(dt,JSON.parse(keysJSON),yaw);
+  for (const [key,pose] of localStations) {
+    const actor=guildSimulation.npcs.get(key);
+    if (!actor) continue;
+    // Local station idle logic faces its own workstation each step. Interpolate
+    // from the last shared heading so the visual turn follows the shared worker.
+    if (actor.sharedYaw!==undefined) actor.yaw=actor.sharedYaw;
+    const walking=advanceGuildPose(actor,pose,dt);
+    actor.sharedYaw=actor.yaw;
+    actor.moving=walking || pose.moving===true;
+    actor.activity=pose.activity;
+  }
   const arrived=guildSimulation.arrived;
   guildSimulation.arrived=null;
   const {entities,targetKey,message,hp,maxHp,logs,woodXp,combatXp,revision}=guildSimulation.adventure;
   return JSON.stringify({player:{...guildActor(guildSimulation.player),loadout:guildSimulation.player.loadout},
-    humans:guildTeamFrame(dt),
+    humans:guildTeamFrame(dt),visitors:visitingFrame(dt),
     adventure:{entities,targetKey,message,hp,maxHp,logs,woodXp,combatXp,revision},
     npcs:Array.from(guildSimulation.npcs.values(),guildActor),arrived,time:guildSimulation.time});
 }

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHmac, createHash } from 'node:crypto';
 import test from 'node:test';
 import { WebSocket } from 'ws';
 import { TokenVerifier } from 'livekit-server-sdk';
@@ -173,7 +173,7 @@ test('only the owner opens a current desktop target and receives its private dis
   assert.equal((await post('/api/herdr-world', {}, owner.session)).status,409);
   const guestConnection = await connect(guest.session), ownerConnection = await connect(owner.session);
   const [g,o] = await Promise.all([guestConnection.state(s=>s.agents.length),ownerConnection.state(s=>s.agents.length)]);
-  assert.ok(g.agents.every(a=>Object.keys(a).sort().join() === 'id,kind,name,status'));
+  assert.ok(g.agents.every(a=>Object.keys(a).sort().join() === 'hostAgent,id,kind,name,ownerId,ownerName,status'));
   const titled = o.agents.filter(a=>a.chatTitle);
   assert.equal(titled.length, 1);
   assert.equal(titled[0].chatTitle, 'Review the maze');
@@ -250,7 +250,7 @@ test('the embedded desktop shares its saved position, outfit and sanitized agent
   const scene={type:'scene',agents:[[key,2,4,1,'farm',false],['hidden-session',5,6,1,'idle',true],[key,2,4,1,'arbitrary text',true]]};
   g.ws.send(JSON.stringify(scene));g.ws.send(JSON.stringify({...move,x:90}));
   const bounded = await g.state(s=>s.peers.find(p=>p.id===guest.id)?.seq===1);
-  assert.deepEqual(bounded.scene,[]);
+  assert.ok(bounded.scene.length===1 && bounded.scene[0][4]!=='arbitrary text'); // canonical fallback for visiting Herdr
   assert.ok(Math.abs(bounded.peers.find(p=>p.id===guest.id).x - position.x) <= 1.601);
   h.ws.send(JSON.stringify(move));h.ws.send(JSON.stringify(scene));
   const snapshot=await g.state(s=>s.scene.length===1 && s.peers.find(p=>p.id===host.id)?.seq===1);
@@ -259,21 +259,22 @@ test('the embedded desktop shares its saved position, outfit and sanitized agent
   assert.equal(actor.moving,true);assert.equal(actor.activity,'wood');
   assert.deepEqual(snapshot.scene,[[snapshot.agents[0].id,2,4,1,'farm',false]]);
   assert.doesNotMatch(JSON.stringify(snapshot),/private:|hidden-session|Host private chat/);
-  // Keep audio presence connected when the presenter stops reporting.
-  await g.state(s=>s.scene.length===0 && s.peers.length===2);
+  // Keep audio presence connected and resume the visitor's fallback simulation.
+  const fallback = s => s.scene.length===1 && (s.scene[0][1]!==2 || s.scene[0][2]!==4);
+  await g.state(s=>fallback(s) && s.peers.length===2);
   h.ws.send(JSON.stringify(scene));
-  await g.state(s=>s.scene.length===1);
+  await g.state(s=>s.scene.length===1 && !fallback(s));
   h.ws.send(JSON.stringify({type:'scene',agents:[]}));
-  await g.state(s=>s.scene.length===0 && s.peers.length===2);
+  await g.state(s=>fallback(s) && s.peers.length===2);
   h.ws.send(JSON.stringify(scene));
-  await g.state(s=>s.scene.length===1);
+  await g.state(s=>s.scene.length===1 && !fallback(s));
   h.ws.close();
-  await g.state(s=>s.scene.length===0 && s.peers.length===1);
+  await g.state(s=>fallback(s) && s.peers.length===1);
   const resumed = await connect(host.session);
   resumed.ws.send(JSON.stringify(scene));
-  await g.state(s=>s.scene.length===1);
+  await g.state(s=>s.scene.length===1 && !fallback(s));
   assert.equal((await post('/api/leave', {}, host.session)).status,200);
-  await g.state(s=>s.scene.length===0 && s.peers.length===1);
+  await g.state(s=>fallback(s) && s.peers.length===1);
 });
 
 
@@ -308,4 +309,135 @@ test('a native guest opening its renderer after joining gets one valid spawn upd
   send(3,11,-3);
   const next = me(await socket.state(s=>me(s).seq===3));
   assert.ok(Math.hypot(next.x-spawned.x,next.z-spawned.z)<=1.601);
+});
+
+const localId = input => createHash('sha256').update(input).digest('hex');
+const postRoster = (connection, agents, sharing = true, extra = {}) =>
+  connection.ws.send(JSON.stringify({type:'roster', agents, sharing,...extra}));
+
+async function enterDesktop(guild, name, key, options = {}) {
+  const response = await guild.post('/api/join', {name, invite:invitation, client:'herdr', contributorKey:key, ...options});
+  assert.equal(response.status,201);
+  const player = await response.json();
+  return {...player,...await guild.connect(player.session)};
+}
+
+test('two invited desktops share independently, occupy distinct workstations, and keep identifiers and conversations local', async t => {
+  const guild=await fixture(t);
+  const id=localId('opaque input'), aKey=localId('private install A'), bKey=localId('private install B');
+  const alice=await enterDesktop(guild,'Alice',aKey,{shareAgents:true});
+  const bob=await enterDesktop(guild,'Bob',bKey);
+  const browser=await guild.connect((await guild.join('Web guest')).session);
+  const raw={id,kind:'Codex',status:'working',name:'CONFIDENTIAL',cwd:'/private/client',ownerId:alice.id,chatTitle:'CONFIDENTIAL'};
+  // Neither an opt-out desktop nor a browser can inject agents by publishing a normal scene/roster.
+  bob.ws.send(JSON.stringify({type:'roster',agents:[raw]}));
+  postRoster(browser,[raw]);
+  postRoster(alice,[raw,{...raw,id:'private-session-key'},{...raw,id:localId('offline'),status:'offline'}]);
+  let world=await browser.state(s=>s.agents.length===1);
+  assert.equal(world.agents[0].ownerId,alice.id);
+  assert.equal(world.scene.length,1);
+  postRoster(bob,[raw]);
+  world=await browser.state(s=>s.agents.length===2);
+  assert.equal(world.sharedStations,true);
+  assert.ok(world.agents.every(a=>a.status==='working' && a.name==='Codex mage 1' && !a.hostAgent));
+  assert.deepEqual(new Set(world.agents.map(a=>a.ownerName)),new Set(['Alice','Bob']));
+  const aliceId=world.agents.find(a=>a.ownerId===alice.id).id, bobId=world.agents.find(a=>a.ownerId===bob.id).id;
+  assert.notEqual(aliceId,bobId);
+  assert.deepEqual(new Set(world.scene.map(row=>row[0])),new Set([aliceId,bobId]));
+  assert.equal(new Set(world.scene.map(row=>row.slice(1,3).join(','))).size,2);
+  assert.ok(world.scene.every(row=>['wood','mine','smith','fish','farm'].includes(row[4])));
+  assert.ok(!Object.hasOwn(world,'ownAgentIds'));
+  for (const secret of [id,aKey,bKey,'CONFIDENTIAL','/private/client','private-session-key']) assert.ok(!JSON.stringify(world).includes(secret));
+  const native=await alice.state(s=>s.agents.length===2);
+  assert.deepEqual(native.ownAgentIds,{[id]:aliceId});
+  assert.deepEqual(native.scene,world.scene);
+  assert.equal((await guild.post('/api/agent-chat',{id:bobId},alice.session)).status,403);
+  postRoster(bob,[],false);
+  await browser.state(s=>s.agents.length===1 && s.agents[0].id===aliceId);
+  // Re-enable, change status while the publisher is in a chat, and walk to the commons.
+  postRoster(bob,[{...raw,status:'idle'}]);
+  world=await browser.state(s=>s.scene.some(row=>row[0]===bobId && row[4]==='idle'));
+  assert.equal(world.agents.find(a=>a.id===bobId).status,'idle');
+  const before=world.scene.find(row=>row[0]===aliceId);
+  postRoster(alice,[{...raw,status:'idle'}]);
+  await browser.state(s=>s.scene.some(row=>row[0]===aliceId && row[4]==='idle' && row[5] && Math.hypot(row[1]-before[1],row[2]-before[2])>0));
+  bob.ws.terminate();
+  await browser.state(s=>s.agents.length===1 && !s.peers.some(p=>p.id===bob.id));
+});
+
+test('a returning installation retains its agents and its old socket cannot withdraw them', async t => {
+  const guild=await fixture(t,{rosterMaxAgeMs:500});
+  const source=localId('same desktop configuration'), id=localId('session z');
+  const row={id,kind:'Pi',status:'working'};
+  const browser=await guild.connect((await guild.join('Watch')).session);
+  const old=await enterDesktop(guild,'Original',source,{shareAgents:true});
+  postRoster(old,[row]);
+  const original=(await browser.state(s=>s.agents.length===1)).agents[0].id;
+  const replacement=await enterDesktop(guild,'Replacement',source);
+  postRoster(replacement,[row]);
+  let world=await browser.state(s=>s.agents.length===1 && s.agents[0].ownerId===replacement.id);
+  assert.equal(world.agents[0].id,original);
+  postRoster(old,[],false);
+  postRoster(old,[{id:localId('old source'),kind:'Hermes',status:'working'}]);
+  const staleReconnect=await guild.connect(old.session);
+  postRoster(staleReconnect,[],false);
+  await guild.post('/api/leave',{},old.session);
+  world=await browser.state(s=>s.peers.length===2 && s.agents.length===1);
+  assert.equal(world.agents[0].id,original);
+  // An interrupted reporter expires even if the person stays connected.
+  await browser.state(s=>s.peers.length===2 && s.agents.length===0 && !s.sharedStations);
+  postRoster(replacement,[row]);
+  await browser.state(s=>s.agents.length===1 && s.agents[0].id===original);
+  await guild.post('/api/leave',{},replacement.session);
+  await browser.state(s=>s.agents.length===0);
+});
+
+test('host file identities bind before publication and cannot be duplicated or commandeered by visitors', async t => {
+  const {mkdtemp, rm, writeFile}=await import('node:fs/promises');
+  const {tmpdir}=await import('node:os');
+  const {join}=await import('node:path');
+  const folder=await mkdtemp(join(tmpdir(),'guild-team-host-'));
+  t.after(()=>rm(folder,{recursive:true,force:true}));
+  const file=join(folder,'roster.json'), raw='local conversation key', owner=randomBytes(32).toString('hex');
+  await writeFile(file,JSON.stringify({'runespace.snapshot':{at:Date.now()/1000,agents:[
+    {key:raw,kind:'Claude',name:'Private host topic',status:'working'}]}}));
+  const guild=await fixture(t,{agentRoster:file,desktop:{mod:'runespace',cli:'/app/herdr',token:owner}});
+  const host=await enterDesktop(guild,'Home',localId('home'),{owner});
+  const key=createHmac('sha256',owner).update(raw).digest('hex');
+  const own=await host.state(s=>s.agents.length===1);
+  const hostId=own.agents[0].id;
+  assert.equal(own.hostDesktop,true);
+  assert.deepEqual(own.ownAgentIds,{[key]:hostId});
+  const visitor=await enterDesktop(guild,'Visitor',localId('visiting'));
+  let world=await visitor.state(s=>s.agents.some(a=>a.hostAgent));
+  assert.ok(world.scene.some(row=>row[0]===hostId));
+  assert.equal(world.agents[0].ownerId,host.id);
+  assert.equal(world.hostDesktop,false);
+  assert.deepEqual(world.ownAgentIds,{});
+  assert.ok(!JSON.stringify(world).includes('Private host topic'));
+  const hostScene=[[key,2,4,.4,'farm',false]];
+  postRoster(host,[{id:key,kind:'Claude',status:'working'}],true,{scene:hostScene});
+  await visitor.state(s=>s.scene.some(row=>row[0]===hostId && row[1]===2 && row[2]===4));
+  postRoster(visitor,[{id:key,kind:'Claude',status:'working'}],true,{scene:hostScene});
+  world=await host.state(s=>s.agents.length===2 && s.sharedStations);
+  assert.equal(world.agents.filter(a=>a.hostAgent).length,1);
+  const guestId=world.agents.find(a=>!a.hostAgent).id;
+  assert.notEqual(guestId,hostId);
+  assert.equal((await guild.post('/api/agent-chat',{id:guestId},host.session)).status,404);
+  // Withdrawing the file-backed owner leaves visitor-owned agents in town.
+  postRoster(host,[],false);
+  await visitor.state(s=>s.agents.length===1 && s.agents[0].id===guestId);
+  postRoster(host,[],true);
+  await visitor.state(s=>s.agents.length===2);
+});
+
+test('a large gathering has distinct walkable commons positions after the ordinary fire rings fill', async t => {
+  const guild=await fixture(t);
+  const guest=await guild.connect((await guild.join('Observer')).session);
+  const rows=Array.from({length:64},(_,i)=>({id:localId('token '+i),kind:'Agent',status:'idle'}));
+  const publishers=await Promise.all(Array.from({length:4},(_,i)=>enterDesktop(guild,'Member '+i,localId('device '+i))));
+  for (const person of publishers) postRoster(person,rows);
+  const world=await guest.state(s=>s.scene.length===256);
+  assert.equal(new Set(world.scene.map(row=>row.slice(1,3).join(','))).size,256);
+  assert.ok(world.scene.every(row=>row[4]==='idle'));
 });

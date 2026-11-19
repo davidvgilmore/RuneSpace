@@ -9,6 +9,32 @@ const guildClasses = new Map([
 
 export const rosterId = key => createHmac('sha256', salt).update(key).digest('hex').slice(0, 18);
 
+const statuses = new Set(['working','idle','blocked','error']);
+export const validMemberId = id => typeof id === 'string' && /^[0-9a-f]{64}$/.test(id);
+export const hostMemberId = (owner, key) => createHmac('sha256', owner).update(key).digest('hex');
+
+function nameAgents(rows) {
+  const serials = new Map();
+  return [...rows].sort((a, b) => a.id.localeCompare(b.id)).slice(0, 64).map(agent => {
+    const serial = (serials.get(agent.kind) || 0) + 1;
+    serials.set(agent.kind, serial);
+    return {...agent, name: agent.kind + ' ' + guildClasses.get(agent.kind) + ' ' + serial};
+  });
+}
+
+// Construct the public record field-by-field. A contributor never selects the owner or a public ID.
+export function memberRoster(rows, namespace) {
+  const entries = new Map(), bindings = {};
+  for (const row of rows) {
+    if (!validMemberId(row?.id) || !statuses.has(row.status)) continue;
+    const id = 'member-' + createHmac('sha256', namespace).update(row.id).digest('hex').slice(0, 24);
+    const kind = guildClasses.has(row.kind) ? row.kind : 'Agent';
+    bindings[row.id] = id;
+    entries.set(id, {id, kind, status:row.status});
+  }
+  return {agents:nameAgents(entries.values()), bindings};
+}
+
 function conversationTitle(source) {
   if (typeof source.name !== 'string') return null;
   const title = source.name.trim();
@@ -42,23 +68,19 @@ async function readEntries(file, mod) {
     const id = rosterId(source.key);
     roster.set(id, {id, kind, key:source.key, chatTitle:mod ? conversationTitle(source) : null, status: source.status === 'working' ? 'working' : 'idle'});
   }
-  const serials = new Map();
-  return [...roster.values()].sort((a, b) => a.id.localeCompare(b.id)).slice(0, 64).map(agent => {
-    const serial = (serials.get(agent.kind) || 0) + 1;
-    serials.set(agent.kind, serial);
-    return {...agent, name: agent.kind + ' ' + guildClasses.get(agent.kind) + ' ' + serial};
-  });
+  return nameAgents(roster.values());
 }
 
 // Never send Herdr's desktop session key to a browser.
-export async function readRosterViews(file, mod) {
-  const guests = [], owner = [];
-  for (const {id, kind, name, status, chatTitle} of await readEntries(file, mod)) {
+export async function readRosterViews(file, mod, ownerToken) {
+  const guests = [], owner = [], bindings = {};
+  for (const {id, key, kind, name, status, chatTitle} of await readEntries(file, mod)) {
     const common = {id, kind, name, status};
     guests.push(common);
+    if (ownerToken) bindings[hostMemberId(ownerToken,key)] = id;
     owner.push(chatTitle ? {...common, chatTitle} : common);
   }
-  return {guests, owner};
+  return {guests, owner, bindings};
 }
 
 export async function readRoster(file, mod) {

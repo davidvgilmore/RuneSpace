@@ -73,6 +73,18 @@ private struct TeamPeer: Codable {
     let loadout, gear: [String:String]?
 }
 
+private struct GuildWorker: Codable {
+    let id, name, ownerName, kind, status, activity: String
+    let x, z, yaw: Double
+    let moving: Bool?
+}
+
+private struct GuildStation: Codable {
+    let key, activity: String
+    let x, z, yaw: Double
+    let moving: Bool?
+}
+
 private struct FrameRequest: Decodable {
     let type: String
     let width, height, slot: Int?
@@ -83,6 +95,8 @@ private struct FrameRequest: Decodable {
     let home, nearest, cancel, names, dance, inspect: Bool?
     let benchmark, teamSelf: String?
     let teamPeers: [TeamPeer]?
+    let guildAgents: [GuildWorker]?
+    let guildStations: [GuildStation]?
 }
 
 final class TerminalSurface {
@@ -167,6 +181,14 @@ final class TerminalSurface {
             let snapshot = try JSONEncoder().encode(peers)
             engine.call("guildTeamSync", [String(decoding:snapshot, as:UTF8.self), teamSelf])
         }
+        if let workers = r.guildAgents {
+            let snapshot = try JSONEncoder().encode(workers)
+            engine.call("guildAgentsSync", [String(decoding:snapshot, as:UTF8.self)])
+        }
+        if let stations = r.guildStations {
+            let snapshot = try JSONEncoder().encode(stations)
+            engine.call("guildStationsSync", [String(decoding:snapshot, as:UTF8.self)])
+        }
         let keys=Set(r.keys ?? [])
         if r.benchmark == "begin" && savedCamera == nil {
             savedCamera=camera
@@ -194,7 +216,12 @@ final class TerminalSurface {
         }
         let frame=try engine.step(dt,keys:keys,yaw:camera.yaw)
         let close = nearest(frame)
-        let arrived=(r.nearest==true ? close?.key:nil) ?? frame.arrived
+        let nearestVisitor=frame.visitors.min { hypot($0.x-frame.player.x,$0.z-frame.player.z) < hypot($1.x-frame.player.x,$1.z-frame.player.z) }
+        let visitorCloser=nearestVisitor.map { visitor in
+            let distance=hypot(visitor.x-frame.player.x,visitor.z-frame.player.z)
+            return distance < 2.8 && distance < (close.map {hypot($0.x-frame.player.x,$0.z-frame.player.z)} ?? .infinity)
+        } ?? false
+        let arrived=(r.nearest==true && !visitorCloser ? close?.key:nil) ?? frame.arrived
         camera.follow(frame.player)
         previous=frame
         if let position=point(r.pointer) { pointer=position }
@@ -210,8 +237,8 @@ final class TerminalSurface {
         blit.endEncoding()
         cb.commit();cb.waitUntilCompleted()
         guard cb.status == .completed else {throw cb.error ?? problem("Metal frame did not finish")}
-        if r.names == true || hover != nil || close != nil || !frame.humans.isEmpty {
-            labels.draw(frame:frame,camera:camera,target:hover ?? close.map(WorldPick.agent),names:r.names == true,
+        if r.names == true || hover != nil || close != nil || !frame.humans.isEmpty || !frame.visitors.isEmpty {
+            labels.draw(frame:frame,camera:camera,target:hover ?? (visitorCloser ? nearestVisitor.map(WorldPick.visitor) : close.map(WorldPick.agent)),names:r.names == true,
                         into:slot.buffer.contents(),width:w,height:h,hudScale:CGFloat(r.hudScale ?? 1))
         }
         let actors=frame.npcs.map { a -> [String:Any] in
@@ -221,6 +248,13 @@ final class TerminalSurface {
                     "worldX":a.x,"worldZ":a.z,"yaw":a.yaw,"moving":a.moving]
         }
         let loadout = frame.player.loadout ?? [:]
+        let visitingAgents = frame.visitors.map { actor -> [String:Any] in
+            let feet=camera.screen(actor.x,actor.elevation,actor.z), head=camera.screen(actor.x,actor.elevation+actor.height,actor.z)
+            return ["id":String(actor.key.dropFirst("visitor:".count)), "name":actor.name ?? actor.guildClass,
+                    "ownerName":actor.ownerName ?? "Teammate", "kind":actor.kind ?? "Adventurer",
+                    "activity":actor.activity ?? "idle", "status":actor.status ?? "idle", "moving":actor.moving,
+                    "x":actor.x,"z":actor.z,"yaw":actor.yaw,"screenX":feet.x,"screenY":feet.y,"headY":head.y]
+        }
         let teamPose: [String:Any] = ["x":frame.player.x, "z":frame.player.z, "yaw":frame.player.yaw,
             "activity":frame.player.activity ?? "idle", "moving":frame.player.moving, "loadout":loadout, "gear":loadout]
         let teamCharacters = frame.humans.map { actor -> [String:Any] in
@@ -233,7 +267,7 @@ final class TerminalSurface {
         var response: [String:Any] = ["type":"frame","slot":n,"path":slot.file.path,"width":w,"height":h,"size":bytes,
               "at":CACurrentMediaTime(),"x":frame.player.x,"z":frame.player.z,"yaw":camera.yaw,"zoom":camera.zoom,"pitch":camera.pitch,
               "playerActivity":frame.player.activity ?? "idle","equipment":frame.player.parts ?? [],"dancePhase":(frame.player.activity == "dance" ? frame.player.posePhase : nil) as Any? ?? NSNull(),
-              "teamPose":teamPose,"teamCharacters":teamCharacters,"agents":actors,"arrived":arrived as Any? ?? NSNull(),"visible":visible,
+              "teamPose":teamPose,"teamCharacters":teamCharacters,"visitingAgents":visitingAgents,"agents":actors,"arrived":arrived as Any? ?? NSNull(),"visible":visible,
               "hovered":hover?.key as Any? ?? NSNull(),"nearest":close?.key as Any? ?? NSNull()]
         if let status = frame.adventure.status(hover:hover?.entity) {
             response["adventureStatus"] = status.title + "  ·  " + status.detail

@@ -9,9 +9,10 @@ const bridge = window.webkit?.messageHandlers.guild;
 const now = () => performance.now();
 const frameWidth = 144, frameHeight = 81;
 let config, session, socket, self, peers = [];
+let guildAgents = [], guildStations = [], sharing = false;
 let status = 'connecting', message = '', deviceError = '', mediaConnected = false, mediaBusy = false;
 let retryAt = 0, mediaRetryAt = 0, joining = false, stopped = false;
-let sequence = 0, sentPose = '', sentScene = '', lastMove = 0, lastScene = 0, lastSceneSent = 0;
+let sequence = 0, sentPose = '', sentRoster = '', lastMove = 0, lastRoster = 0, lastRosterSent = 0;
 let pose, lastTiles = 0, mediaGeneration = 0;
 const can = document.createElement('canvas');
 can.width = frameWidth; can.height = frameHeight;
@@ -58,6 +59,24 @@ async function connectMedia() {
   } finally { if (ticket === mediaGeneration) mediaBusy = false; }
 }
 
+// Keep each desktop's own agents selectable through their private Herdr session.
+function placeRoster(world) {
+  const poses = new Map((world.scene || []).map(([id,x,z,yaw,activity,moving]) =>
+    [id,{x,z,yaw,activity,moving}]));
+  const local = new Map(Object.entries(world.ownAgentIds || {}).map(([key,id]) => [id,key]));
+  guildAgents = [];
+  guildStations = [];
+  for (const agent of world.agents || []) {
+    const pose = poses.get(agent.id);
+    if (!pose) continue;
+    if (local.has(agent.id) || agent.ownerId === world.self || (world.hostDesktop && agent.hostAgent)) {
+      if (world.sharedStations && local.has(agent.id)) guildStations.push({id:local.get(agent.id),...pose});
+    } else if (agent.ownerName) {
+      guildAgents.push({id:agent.id,name:agent.name,kind:agent.kind,status:agent.status,ownerName:agent.ownerName,...pose});
+    }
+  }
+}
+
 function connectSocket() {
   const url = new URL('/presence', location.origin);
   url.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -71,6 +90,7 @@ function connectSocket() {
     self = world.peers.find(p => p.id === world.self);
     peers = world.peers.filter(p => p.id !== world.self);
     if (!self) return;
+    placeRoster(world);
     sequence = Math.max(sequence, self.seq || 0);
     status = 'connected';
     media.setPositions(self, peers);
@@ -78,7 +98,7 @@ function connectSocket() {
   };
   ws.onclose = event => {
     if (ws !== socket || stopped) return;
-    socket = null; self = null; peers = []; sentPose = sentScene = '';
+    socket = null; self = null; peers = []; guildAgents = []; guildStations = []; sentPose = sentRoster = '';
     if (event.code === 1008 || event.code === 4001) session = null;
     resetMedia();
     status = 'connecting'; message = 'Reconnecting to the guild…'; retryAt = now() + 1000;
@@ -92,7 +112,7 @@ async function join() {
     if (!session) {
       const occupy = pose && {x:pose.x,z:pose.z,yaw:pose.yaw};
       session = await post('/api/join', {name:config.name,invite:config.invite,owner:config.owner,
-        client:'herdr',position:occupy});
+        client:'herdr',position:occupy,contributorKey:config.contributorKey,shareAgents:sharing});
     }
     if (!stopped) {message = session.media ? '' : 'This guild has presence only. Voice and video are unavailable.'; connectSocket();}
   } catch (error) {
@@ -111,16 +131,21 @@ function sendPosition(time) {
       socket.send(JSON.stringify({...move,seq:++sequence})); sentPose = key; lastMove = time;
     }
   }
-  if (config.owner && time-lastScene >= 250) {
-    const fresh = Number.isFinite(pose.sceneAt) && Math.abs(Date.now()/1000 - pose.sceneAt) <= 7;
-    const agents = fresh && Array.isArray(pose.agents) ? pose.agents : [];
-    const data = JSON.stringify({type:'scene',agents});
-    if (data !== sentScene || (agents.length && time-lastSceneSent >= 3000)) {
-      socket.send(data);
-      sentScene = data; lastSceneSent = time;
-    }
-    lastScene = time;
+
+}
+
+function sendRoster(time) {
+  if (!self || socket?.readyState !== WebSocket.OPEN || time-lastRoster < 250) return;
+  const fresh = Number.isFinite(pose?.sceneAt) && Math.abs(Date.now()/1000-pose.sceneAt) <= 7;
+  const agents = sharing && Array.isArray(pose?.roster) ? pose.roster : [];
+  const scene = sharing && fresh && Array.isArray(pose?.agents) ? pose.agents : [];
+  const data = JSON.stringify({type:'roster',sharing,agents,scene});
+  if (data !== sentRoster || (sharing && time-lastRosterSent >= 3000)) {
+    socket.send(data);
+    sentRoster = data;
+    lastRosterSent = time;
   }
+  lastRoster = time;
 }
 
 function encodePixels(bytes) {
@@ -157,20 +182,22 @@ function sampleTiles(time) {
 
 window.runespaceSocial = {
   start(settings) {
-    if (!config) {config = settings; pose = settings.position; void join();}
+    if (!config) {config = settings; sharing = settings.shareAgents === true; pose = settings.position; void join();}
   },
-  step(position, command) {
+  step(position, command, shareAgents) {
+    if (typeof shareAgents === 'boolean') sharing = shareAgents;
     if (position) pose = position;
     const time = now();
     if (!socket && time >= retryAt) void join();
     if (status === 'connected' && time >= mediaRetryAt) void connectMedia();
     sendPosition(time);
+    sendRoster(time);
     if (command && ['mic','camera','sound'].includes(command)) {
       const button = element(command);
       if (mediaConnected && !button.disabled) button.click();
       else message = 'Voice and video are still connecting.';
     }
-    return {status,connected:status==='connected',self:self?.id||null,peers,mediaConnected,
+    return {status,connected:status==='connected',self:self?.id||null,peers,guildAgents,guildStations,mediaConnected,
       mic:mic.getAttribute('aria-pressed')==='true', camera:camera.getAttribute('aria-pressed')==='true',
       audioBlocked:!sound.hidden, message, error:status==='offline'?message:deviceError, tiles:sampleTiles(time)};
   },

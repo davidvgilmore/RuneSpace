@@ -38,6 +38,8 @@ class GuildPresence:
         self.directory = Path(data) / 'runespace-social'
         self.next_read = self.next_write = 0
         self.stamp = self.sent_peers = self.previous_pose = None
+        self.agent_update = self.binding_stamp = self.sent_agents = self.sent_stations = None
+        self.bindings = {}
         self.last_heartbeat = 0
         self.member_count = 0
         self.tiles = []
@@ -66,8 +68,52 @@ class GuildPresence:
         if members != self.sent_peers:
             request.update(teamPeers=actors, teamSelf=identity if isinstance(identity, str) else '')
             self.sent_peers = members
+        self.read_agents(request, online)
         self.member_count = len(actors) + 1 if online else 0
         self.read_tiles(self.state.get('tiles') if online else [])
+
+    def read_agents(self, request, online):
+        file = self.directory/'agent-bindings.json'
+        try:
+            stamp = file.stat().st_mtime_ns if online else None
+            if stamp != self.binding_stamp:
+                data = json.loads(file.read_bytes()) if online else {}
+                self.bindings = data if isinstance(data,dict) else {}
+                self.binding_stamp = stamp
+        except (OSError,ValueError):
+            self.bindings = {}
+            self.binding_stamp = None
+        revision = (self.stamp, self.binding_stamp, online)
+        if revision == self.agent_update:
+            return
+        self.agent_update = revision
+        for field in ('guildAgents','guildStations'):
+            rows = self.state.get(field) if online else []
+            result = []
+            for row in (rows if isinstance(rows,list) else [])[:2048]:
+                if not isinstance(row,dict) or not isinstance(row.get('id'),str):
+                    continue
+                if not all(number(row.get(k)) for k in ('x','z','yaw')) or abs(row['x'])>20 or abs(row['z'])>19:
+                    continue
+                pose = {k:row[k] for k in ('x','z','yaw')}
+                pose['activity'] = row.get('activity') if row.get('activity') in ('wood','fish','smith','mine','farm','waiting','blocked','error','unknown') else 'idle'
+                pose['moving'] = row.get('moving') is True
+                if field=='guildStations':
+                    key = self.bindings.get(row['id'])
+                    if not isinstance(key,str) or not key:
+                        continue
+                    pose['key'] = key
+                else:
+                    fields = ('name','kind','status','ownerName')
+                    if not all(isinstance(row.get(k),str) for k in fields):
+                        continue
+                    pose.update({k:row[k][:64] for k in fields},id=row['id'][:80])
+                result.append(pose)
+            before = self.sent_agents if field=='guildAgents' else self.sent_stations
+            if result != before:
+                request[field] = result
+                if field=='guildAgents': self.sent_agents = result
+                else: self.sent_stations = result
 
     def read_tiles(self, tiles):
         visible = [t for t in (tiles if isinstance(tiles, list) else []) if isinstance(t, dict)

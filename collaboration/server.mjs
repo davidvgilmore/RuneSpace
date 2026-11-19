@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID, createHash, timingSafeEqual } from 'node:crypto';
+import { randomBytes, randomUUID, createHmac, createHash, timingSafeEqual } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { Server } from 'node:http';
 import { createRequire } from 'node:module';
@@ -8,7 +8,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { AccessToken, TrackSource } from 'livekit-server-sdk';
 import { normalizeLoadout } from '../layout/mods/runespace/equipment.js';
 import { Simulation, ACTIVITY } from '../layout/mods/runespace/world-engine.js';
-import { readRosterViews, rosterId } from './agents.mjs';
+import { readRosterViews, rosterId, memberRoster, validMemberId } from './agents.mjs';
 import { createHostActions } from './host-actions.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -69,7 +69,7 @@ export function settings(env = process.env) {
 }
 
 export function createRoomServer(options = {}) {
-  const { host = '127.0.0.1', port = 8787, livekit, agentRoster, resumeMs = 45_000, capacity = 32, sceneMaxAgeMs = 10_000 } = options;
+  const { host = '127.0.0.1', port = 8787, livekit, agentRoster, resumeMs = 45_000, capacity = 32, sceneMaxAgeMs = 10_000, rosterMaxAgeMs = 20_000 } = options;
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('Invalid room service port.');
   const invite = options.invite || secret();
   if (invite.length < 16 || invite.length > 512) throw new Error('Use an invitation of 16–512 characters.');
@@ -92,34 +92,53 @@ export function createRoomServer(options = {}) {
   const roomName = 'runespace-' + randomUUID();
   const sim = new Simulation();
   const sessions = new Map();
+  let nextSessionOrder = 0;
   const sockets = new WebSocketServer({ noServer: true, maxPayload: 32768, perMessageDeflate: false });
   const server = new Server();
   server.headersTimeout = 10_000;
   server.requestTimeout = 10_000;
   let origin, broadcastTimer, maintenance, refreshTimer, readingRoster = false, stopping = false;
-  let agentViews = {guests: [], owner: []};
+  let agentViews = {guests: [], owner: [], bindings: {}};
   const allowedOrigin = value => configuredOrigin ? value === configuredOrigin : [
     'http://127.0.0.1:', 'http://localhost:', 'http://[::1]:'
   ].some(base => value === base + server.address()?.port);
 
-  let sceneHost = null, sceneTimer;
+  const publishers = new Map();
+  let hostSharing = true, sceneHost = null, sceneTimer, walkingTimer;
+  let townRoster, placed, expandedCommons = false;
+  function rosterChanged() {
+    townRoster = null;
+    publish();
+  }
+  function expandCommons() {
+    // A full room can bring more idle characters than a single desktop's fire rings.
+    // Fill the remaining walkable tiles outwards from the fire, retaining reserved stations.
+    const reserved = sim.commons.concat(...Object.values(sim.stations)), extra = [];
+    for (let z=-18.5;z<=18.5;z+=.5) for (let x=-19.5;x<=19.5;x+=.5) {
+      const radius = x*x + (z-3)*(z-3);
+      if (radius < 4 || sim.blocked(x,z) || reserved.some(p => (x-p.x)**2+(z-p.z)**2 < .25)) continue;
+      extra.push({x,z,faceX:0,faceZ:3,radius});
+    }
+    extra.sort((a,b) => a.radius-b.radius);
+    sim.commons.push(...extra);
+    expandedCommons = true;
+  }
   function releaseScene(session) {
     if (session !== sceneHost) return;
     clearTimeout(sceneTimer);
     sceneHost = null;
     publish();
   }
-  let guestIds = new Set();
-  function updateScene(session, entries) {
-    if (!session.nativeHost || !Array.isArray(entries) || entries.length > 64) return;
+  function updateScene(session, entries, ids) {
+    if (!session.hostDesktop || !Array.isArray(entries) || entries.length > 64) return;
     const scene = new Map();
     for (const row of entries) {
       if (!Array.isArray(row)) continue;
-      const [key, x, z, yaw, activity, moving] = row;
+      const [key,x,z,yaw,activity,moving] = row;
       if (typeof key !== 'string' || key.length > 512 || ![x,z,yaw].every(Number.isFinite) ||
-          Math.abs(x)>20 || Math.abs(z)>19 || !Object.hasOwn(ACTIVITY, activity)) continue;
-      const id = rosterId(key);
-      scene.set(id, [id,x,z,normalizeAngle(yaw),activity,moving === true]);
+          Math.abs(x)>20 || Math.abs(z)>19 || typeof activity !== 'string' || !Object.hasOwn(ACTIVITY, activity)) continue;
+      const id = ids ? ids[key] : rosterId(key);
+      if (typeof id === 'string') scene.set(id, [id,x,z,normalizeAngle(yaw),activity,moving === true]);
     }
     if (!scene.size) { releaseScene(session); return; }
     clearTimeout(sceneTimer);
@@ -128,31 +147,94 @@ export function createRoomServer(options = {}) {
     session.scene = [...scene.values()];
     publish();
   }
-  function snapshot(session, peers) {
-    const ws = session.socket;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    if (ws.bufferedAmount > 256 * 1024) { ws.terminate(); return; }
-    const scene = sceneHost?.socket ? sceneHost.scene.filter(row => guestIds.has(row[0])) : [];
-    ws.send(JSON.stringify({ type: 'world', self: session.peer.id, peers, scene, agents: session.isOwner ? agentViews.owner : agentViews.guests }));
+  function clearContribution(session) {
+    clearTimeout(session.rosterTimer);
+    session.rosterTimer = null;
+    if (session.roster) { session.roster = null; rosterChanged(); }
+  }
+  function updateRoster(session, message) {
+    if (!session.native || publishers.get(session.namespace) !== session) return;
+    if (message.sharing !== undefined && typeof message.sharing !== 'boolean') return;
+    if (message.sharing !== undefined) session.sharing = message.sharing;
+    if (session.hostDesktop) {
+      if (session.sharing !== hostSharing) { hostSharing = session.sharing; rosterChanged(); }
+      if (!hostSharing) { releaseScene(session); return; }
+      if (message.scene) updateScene(session, message.scene, agentViews.bindings);
+      return;
+    }
+    if (!session.sharing) { clearContribution(session); return; }
+    if (!Array.isArray(message.agents) || message.agents.length > 64) return;
+    const next = memberRoster(message.agents, session.namespace);
+    if (!next.agents.length) { clearContribution(session); return; }
+    if (JSON.stringify(next) !== JSON.stringify(session.roster)) {
+      session.roster = next;
+      rosterChanged();
+    }
+    clearTimeout(session.rosterTimer);
+    session.rosterTimer = setTimeout(() => clearContribution(session), rosterMaxAgeMs);
+  }
+
+  function collectRoster(connected) {
+    const hostSession = connected.find(s => s.hostDesktop && publishers.get(s.namespace) === s);
+    const host = {ownerId:hostSession?.peer.id ?? null, ownerName:hostSession?.peer.name ?? 'Guild host', hostAgent:true};
+    const agents = hostSharing ? agentViews.guests.map(a => ({...a,...host})) : [];
+    const team = connected.filter(s => s.roster?.agents.length);
+    for (const s of team) {
+      for (const a of s.roster.agents) agents.push({...a, ownerId:s.peer.id, ownerName:s.peer.name, hostAgent:false});
+    }
+    // Everyone uses the same assignment once a visiting desktop shares agents. The game's
+    // allocator keeps existing station reservations through roster changes and queues overflow.
+    if (!expandedCommons && agents.length > sim.commons.length) expandCommons();
+    sim.sync(agents.map(a => ({key:a.id, kind:a.kind, name:a.name, status:a.status})));
+    placed = null;
+    const owners = hostSharing ? agentViews.owner.map(a => ({...a,...host})).concat(agents.slice(agentViews.guests.length)) : agents;
+    return {agents, owners, sharedStations:team.length > 0};
+  }
+  function broadcast() {
+    broadcastTimer = null;
+    const connected = [...sessions.values()].filter(s => s.socket);
+    if (!connected.length) return;
+    const peers = connected.map(s => s.peer);
+    const {agents,owners,sharedStations} = townRoster ??= collectRoster(connected);
+    placed ??= [...sim.npcs.values()].map(p => [p.key,p.x,p.z,p.yaw,p.activity,p.moving]);
+    const hostScene = hostSharing && sceneHost?.socket
+      ? sceneHost.scene.filter(([id]) => sim.npcs.has(id)) : [];
+    const hostPoses = new Map(hostScene.map(row => [row[0],row]));
+    const nativeFallback = !sharedStations && placed.map(row => hostPoses.get(row[0]) ?? row);
+    for (const s of connected) {
+      const ws = s.socket;
+      if (ws.readyState !== WebSocket.OPEN) continue;
+      if (ws.bufferedAmount > 256*1024) { ws.terminate(); continue; }
+      const ownAgentIds = s.hostDesktop ? agentViews.bindings : s.roster?.bindings ?? {};
+      const scene = sharedStations ? placed : s.native && !s.hostDesktop ? nativeFallback : hostScene;
+      ws.send(JSON.stringify({type:'world', self:s.peer.id, peers, agents:s.isOwner ? owners : agents, scene,
+        sharedStations, ...(s.native && {hostDesktop:s.hostDesktop, ownAgentIds})}));
+    }
+    if (!walkingTimer && placed.some(row => sim.npcs.get(row[0]).path.length)) {
+      walkingTimer = setInterval(() => {
+        if (![...sim.npcs.values()].some(npc => npc.path.length)) { clearInterval(walkingTimer); walkingTimer=null; return; }
+        sim.step(.1); placed = null; publish();
+      }, 100);
+    }
   }
   function publish() {
-    if (broadcastTimer || stopping) return;
-    broadcastTimer = setTimeout(() => {
-      broadcastTimer = null;
-      const connected = [...sessions.values()].filter(s => s.socket);
-      const peers = connected.map(s => s.peer);
-      for (const session of connected) snapshot(session, peers);
-    }, 50);
+    if (!broadcastTimer && !stopping) broadcastTimer = setTimeout(broadcast, 50);
   }
   async function refreshAgents() {
     if (!agentRoster || readingRoster || stopping) return;
     readingRoster = true;
     try {
-      const next = await readRosterViews(agentRoster, desktop?.mod);
-      if (JSON.stringify(next) !== JSON.stringify(agentViews)) { agentViews = next; guestIds = new Set(next.guests.map(a => a.id)); publish(); }
+      const next = await readRosterViews(agentRoster, desktop?.mod, options.desktop?.token);
+      if (JSON.stringify(next) !== JSON.stringify(agentViews)) { agentViews = next; rosterChanged(); }
     } catch {
-      if (agentViews.guests.length) { agentViews = {guests: [], owner: []}; guestIds.clear(); publish(); }
+      if (agentViews.guests.length) { agentViews = {guests: [], owner: [], bindings: {}}; rosterChanged(); }
     } finally { readingRoster = false; }
+  }
+  function disconnected(session) {
+    clearContribution(session);
+    if (publishers.get(session.namespace) === session) publishers.delete(session.namespace);
+    releaseScene(session);
+    rosterChanged();
   }
 
   function active(token) {
@@ -233,7 +315,7 @@ export function createRoomServer(options = {}) {
       if (req.method !== 'POST' || !['/api/join', '/api/media', '/api/leave', '/api/agent-chat', '/api/herdr-world'].includes(path)) throw fail(404, 'Not found.');
       if (!allowedOrigin(req.headers.origin)) throw fail(403, 'Unexpected request origin.');
       if (path === '/api/join') {
-        const { invite: invitation, name, owner, client, position } = await body(req);
+        const { invite: invitation, name, owner, client, position, shareAgents, contributorKey } = await body(req);
         if (typeof invitation !== 'string' || !timingSafeEqual(digest(invitation), inviteHash)) throw fail(403, 'Invalid invitation.');
         if (typeof name !== 'string' || !name.trim() || [...name.trim()].length > 32 || /[\p{Cc}\p{Cf}]/u.test(name)) throw fail(400, 'Enter a display name of 1–32 characters.');
         if (sessions.size >= capacity) {
@@ -248,7 +330,11 @@ export function createRoomServer(options = {}) {
           Object.assign(peer, {x:position.x, z:position.z, yaw:normalizeAngle(position.yaw)});
         }
         const needsNativeSpawn = client === 'herdr' && !nativeHost && position == null;
-        sessions.set(token, { peer, isOwner, nativeHost, needsNativeSpawn, socket: null, expires: Date.now()+resumeMs, budget: 1, lastMove: performance.now() });
+        const native = client === 'herdr', hostDesktop = nativeHost && Boolean(agentRoster);
+        const namespace = native ? createHmac('sha256', inviteHash).update(hostDesktop ? 'host' :
+          'guest/' + (validMemberId(contributorKey) ? contributorKey : peer.id)).digest('hex') : null;
+        const sharing = shareAgents === true || (hostDesktop && shareAgents !== false);
+        sessions.set(token, { peer, isOwner, nativeHost, native, hostDesktop, namespace, sharing, order:++nextSessionOrder, needsNativeSpawn, socket: null, expires: Date.now()+resumeMs, budget: 1, lastMove: performance.now() });
         return reply(res, 201, { id: peer.id, session: token, media: Boolean(livekit), canOpenChats: isOwner && Boolean(agentRoster), canOpenWorld: isOwner });
       }
       const auth = req.headers.authorization;
@@ -257,7 +343,7 @@ export function createRoomServer(options = {}) {
       if (!session) throw fail(401, 'Rejoin the guild to continue.');
       if (path === '/api/leave') {
         sessions.delete(token);
-        releaseScene(session);
+        disconnected(session);
         const socket = session.socket;
         session.socket = null;
         socket?.close(1000, 'Left the guild');
@@ -267,7 +353,11 @@ export function createRoomServer(options = {}) {
       if (path === '/api/agent-chat' || path === '/api/herdr-world') {
         if (!session.isOwner) throw fail(403, 'Desktop actions are available to the guild host.');
         if (!session.socket) throw fail(409, 'Reconnect to the guild to open Herdr.');
-        if (path === '/api/agent-chat') await desktop.openChat((await body(req)).id);
+        if (path === '/api/agent-chat') {
+          const {id} = await body(req);
+          if (!hostSharing || typeof id !== 'string' || !/^[0-9a-f]{18}$/.test(id)) throw fail(404, 'This agent belongs to another desktop or has left the guild.');
+          await desktop.openChat(id);
+        }
         else await desktop.openWorld();
         return reply(res, 200, {ok: true});
       }
@@ -309,16 +399,25 @@ export function createRoomServer(options = {}) {
         clearTimeout(helloTimer);
         const previous = session.socket;
         session.socket = ws;
+        if (session.native) {
+          const old = publishers.get(session.namespace);
+          if (!old || old.order <= session.order) {
+            if (old && old !== session) disconnected(old);
+            publishers.set(session.namespace, session);
+            if (session.hostDesktop) hostSharing = session.sharing;
+          }
+        }
         previous?.close(4001, 'Session resumed elsewhere');
-        publish();
+        rosterChanged();
       } else if (session.socket === ws) {
         if (message?.type === 'move') move(session, message);
-        else if (message?.type === 'scene') updateScene(session, message.agents);
+        else if (message?.type === 'roster') updateRoster(session, message);
+        else if (message?.type === 'scene' && publishers.get(session.namespace) === session && hostSharing) updateScene(session, message.agents);
       }
     });
     ws.on('close', () => {
       clearTimeout(helloTimer);
-      if (session?.socket === ws) { session.socket = null; releaseScene(session); session.expires = Date.now()+resumeMs; publish(); }
+      if (session?.socket === ws) { session.socket = null; disconnected(session); session.expires = Date.now()+resumeMs; publish(); }
     });
   });
   return {
@@ -339,7 +438,8 @@ export function createRoomServer(options = {}) {
     },
     async close() {
       stopping = true;
-      clearInterval(maintenance); clearInterval(refreshTimer); clearTimeout(broadcastTimer); clearTimeout(sceneTimer);
+      clearInterval(maintenance); clearInterval(refreshTimer); clearTimeout(broadcastTimer); clearTimeout(sceneTimer); clearInterval(walkingTimer);
+      for (const s of sessions.values()) clearTimeout(s.rosterTimer);
       for (const ws of sockets.clients) ws.terminate();
       sockets.close();
       sessions.clear();

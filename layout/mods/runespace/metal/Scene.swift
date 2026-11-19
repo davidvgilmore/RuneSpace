@@ -7,7 +7,7 @@ import simd
 
 struct Actor: Decodable {
     let key: String
-    let name, host, kind, activity, status: String?
+    let name, host, kind, activity, status, ownerName: String?
     let x, z, yaw: Float
     let moving: Bool
     let hit: Int?
@@ -35,11 +35,12 @@ struct AdventureEntity: Decodable {
 
 enum WorldPick {
     case agent(Actor)
+    case visitor(Actor)
     case human(Actor)
     case adventure(AdventureEntity)
 
     var key: String {
-        switch self { case .agent(let a), .human(let a): return a.key; case .adventure(let a): return a.key }
+        switch self { case .agent(let a), .visitor(let a), .human(let a): return a.key; case .adventure(let a): return a.key }
     }
     var agent: Actor? { if case .agent(let a) = self { return a }; return nil }
     var entity: AdventureEntity? { if case .adventure(let a) = self { return a }; return nil }
@@ -64,7 +65,7 @@ struct AdventureState: Decodable {
 
 struct GuildFrame: Decodable {
     let player: Actor
-    let npcs, humans: [Actor]
+    let npcs, humans, visitors: [Actor]
     let adventure: AdventureState
     let arrived: String?
     let time: Double
@@ -114,7 +115,7 @@ final class WorldEngine {
         savedAdventure = try adventureURL.flatMap(Self.loadAdventure)
         context.exceptionHandler = { _, error in NSLog("Guild simulation: %@", error?.toString() ?? "error") }
         context.evaluateScript(try String(contentsOf: bundle, encoding: .utf8), withSourceURL: bundle)
-        for name in ["guildInit","guildSync","guildTeamSync","guildVisit","guildEquipment","guildFrame","guildWalk","guildTalk","guildInteract","guildSaveAdventure","guildMergedAdventure","guildReconcileAdventure","guildDance","guildStop","guildBenchmark"] {
+        for name in ["guildInit","guildSync","guildTeamSync","guildAgentsSync","guildStationsSync","guildVisit","guildEquipment","guildFrame","guildWalk","guildTalk","guildInteract","guildSaveAdventure","guildMergedAdventure","guildReconcileAdventure","guildDance","guildStop","guildBenchmark"] {
             guard let fn = context.objectForKeyedSubscript(name), fn.isObject else { throw problem("Missing simulation function " + name) }
             functions[name] = fn
         }
@@ -166,7 +167,7 @@ final class WorldEngine {
     func interact(_ pick: WorldPick) {
         switch pick {
         case .agent(let agent): call("guildTalk", [agent.key])
-        case .human(let human): call("guildVisit", [human.x, human.z])
+        case .human(let actor), .visitor(let actor): call("guildVisit", [actor.x, actor.z])
         case .adventure(let entity): call("guildInteract", [entity.key])
         }
     }
@@ -245,8 +246,8 @@ struct GPUCamera {
             return abs(point.x-feet.x) < radius && point.y >= head.y-max(2,depth) && point.y <= feet.y+max(3,depth)
         }
         // Agents remain reachable when someone is working behind a tree or creature.
-        if let actor = frame.npcs.filter({ hits($0.x,$0.z,$0.elevation,$0.height,0.47) })
-            .max(by: { screen($0.x,0,$0.z).y < screen($1.x,0,$1.z).y }) { return .agent(actor) }
+        if let actor = (frame.npcs + frame.visitors).filter({ hits($0.x,$0.z,$0.elevation,$0.height,0.47) })
+            .max(by: { screen($0.x,0,$0.z).y < screen($1.x,0,$1.z).y }) { return actor.ownerName == nil ? .agent(actor) : .visitor(actor) }
         if let entity = frame.adventure.entities.filter({ $0.visible && hits($0.x,$0.z,0,$0.pickHeight,$0.radius) })
             .max(by: { screen($0.x,0,$0.z).y < screen($1.x,0,$1.z).y }) { return .adventure(entity) }
         if let human = frame.humans.filter({ hits($0.x,$0.z,$0.elevation,$0.height,0.47) })
@@ -505,11 +506,11 @@ final class GPUScene {
                  next:count > 1 ? mesh(prefix+String((index+1)%count)) : nil,fraction:Float(phase-Double(index)))
         }
         var inView=0
-        for a in frame.npcs + frame.humans + [frame.player] {
+        for a in frame.npcs + frame.visitors + frame.humans + [frame.player] {
             let local = a.key == frame.player.key
             let player = a.parts != nil
             let bridge=a.elevation
-            if !player {
+            if !player && a.ownerName == nil {
                 let head=camera.screen(a.x,a.height+bridge,a.z),feet=camera.screen(a.x,bridge,a.z)
                 let bounds=CGRect(origin:.zero,size:camera.size)
                 if bounds.contains(head) && bounds.contains(feet) {inView+=1}

@@ -22,5 +22,6 @@ test('only the desktop owner gets a chat action, and each action uses the opaque
   assert.deepEqual(calls,[]);
   identity={...identity,canOpenChats:true,canOpenWorld:true};
   await actions.chat(agent);
+  await actions.chat({...agent,hostAgent:false,ownerName:'Maple'});
   assert.deepEqual(calls,[['/api/agent-chat',{id:'opaque'},'test']]);
 });

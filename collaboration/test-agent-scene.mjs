@@ -45,3 +45,14 @@ test('scene expiry gives NPCs a route from their last position and removes offli
   scene.sync([],[]);
   assert.equal(sim.npcs.size,0);
 });
+
+test('a returning desktop can rename its character while keeping its agent', () => {
+  const sim = new Simulation(), scene = createAgentScene(sim);
+  const agent = {id:'member-id',name:'Pi druid 1',kind:'Pi',status:'working',hostAgent:false};
+  scene.sync([{...agent,ownerId:'first',ownerName:'Maple'}],[]);
+  const worker = sim.npcs.get(agent.id);
+  scene.sync([{...agent,ownerId:'second',ownerName:'Rowan'}],[]);
+  assert.equal(sim.npcs.get(agent.id),worker);
+  assert.equal(worker.ownerName,'Rowan');
+  assert.equal(worker.ownerId,'second');
+});

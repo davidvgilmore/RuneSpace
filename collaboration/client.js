@@ -97,14 +97,14 @@ function showWorld(message){
   const peers=message.peers,agents=message.agents||[];
   nearby=nearbyIdentities(me,peers,nearby);media.setPositions(me,peers);
   const humans=peers.map(p=>[p.name,p.id===me.id?'You':nearby.has(p.id)?'Nearby':'In world']);
-  const npcs=agents.map(a=>[a.chatTitle||a.name,a.status==='working'?'Working':'Idle',a.id]);
+  const npcs=agents.map(a=>[a.chatTitle||a.name,[a.ownerName,({working:'Working',blocked:'Needs attention',error:'Needs attention'})[a.status]||'Idle'].filter(Boolean).join(' · '),a.id,a.hostAgent]);
   const stamp=JSON.stringify([humans,npcs]);
   if(stamp!==lastList){
     $('peer-count').textContent=peers.length;$('agent-count').textContent=agents.length;
     $('peer-list').replaceChildren(...humans.map(pair=>row(...pair)));
     $('agent-list').replaceChildren(...agents.map((agent,i)=>{
       const [name,detail]=npcs[i],li=row(name,detail);
-      if(credentials.canOpenChats){
+      if(credentials.canOpenChats && agent.hostAgent !== false){
         const link=document.createElement('button');link.type='button';link.className='agent-chat';
         link.textContent=name;link.title='Open conversation in Herdr · '+agent.name;
         link.setAttribute('aria-label','Open conversation in Herdr: '+name);

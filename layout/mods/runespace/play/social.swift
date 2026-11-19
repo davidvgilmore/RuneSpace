@@ -18,6 +18,8 @@ final class GuildCall: NSObject, NSApplicationDelegate, WKNavigationDelegate, WK
   let directory: URL
   let endpoint: URL
   let settings: Object
+  let roster: GuildRoster
+  var shareAgents: Bool
   let parent: pid_t
   let web: WKWebView
   let window: NSWindow
@@ -34,10 +36,12 @@ final class GuildCall: NSObject, NSApplicationDelegate, WKNavigationDelegate, WK
   var current: Object = [:]
   var lastDeviceError = ""
 
-  init(directory: URL, endpoint: URL, settings: Object, parent: pid_t) {
+  init(directory: URL, endpoint: URL, settings: Object, roster: GuildRoster, parent: pid_t) {
     self.directory = directory
     self.endpoint = endpoint
     self.settings = settings
+    self.roster = roster
+    self.shareAgents = settings["shareAgents"] as? Bool == true
     self.parent = parent
     let config = WKWebViewConfiguration()
     config.websiteDataStore = .nonPersistent()
@@ -154,7 +158,8 @@ final class GuildCall: NSObject, NSApplicationDelegate, WKNavigationDelegate, WK
       message.frameInfo.request.url?.path == endpoint.path, message.body as? String == "ready"
     else { return }
     var args = settings
-    args["position"] = position()
+    args["shareAgents"] = shareAgents
+    args["position"] = roster.project(position: position(), sharing: shareAgents)
     web.callAsyncJavaScript(
       "window.runespaceSocial.start(settings); return true", arguments: ["settings": args],
       in: nil, in: .page
@@ -224,6 +229,8 @@ final class GuildCall: NSObject, NSApplicationDelegate, WKNavigationDelegate, WK
       finish()
       return
     }
+    if cmd == "share-on" { shareAgents = true }
+    if cmd == "share-off" { shareAgents = false }
     if !loaded {
       if Date() >= retry || Date().timeIntervalSince(lastReady) > 25 {
         retry = .distantFuture
@@ -241,11 +248,13 @@ final class GuildCall: NSObject, NSApplicationDelegate, WKNavigationDelegate, WK
     }
     queued = true
     let generation = pageGeneration
-    var args: Object = ["position": NSNull(), "command": NSNull()]
-    if let p = position() { args["position"] = p }
-    if let cmd { args["command"] = cmd }
+    var args: Object = [
+      "position": roster.project(position: position(), sharing: shareAgents),
+      "command": NSNull(), "sharing": shareAgents,
+    ]
+    if let cmd, ["mic", "camera", "sound"].contains(cmd) { args["command"] = cmd }
     web.callAsyncJavaScript(
-      "return window.runespaceSocial.step(position,command)", arguments: args, in: nil, in: .page
+      "return window.runespaceSocial.step(position,command,sharing)", arguments: args, in: nil, in: .page
     ) { [weak self] result in
       guard let self, !self.stopping, self.pageGeneration == generation else { return }
       self.queued = false
@@ -335,14 +344,17 @@ final class GuildCall: NSObject, NSApplicationDelegate, WKNavigationDelegate, WK
   }
 }
 
-guard CommandLine.arguments.count == 3, let parent = Int32(CommandLine.arguments[2]), parent > 1,
+guard CommandLine.arguments.count == 4, let parent = Int32(CommandLine.arguments[2]), parent > 1,
   kill(parent, 0) == 0
 else { exit(2) }
 let appHome = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
 let directory = appHome.appendingPathComponent("data/runespace-social")
 let handle = open(directory.appendingPathComponent("instance.lock").path, O_CREAT | O_RDWR, 0o600)
 guard handle >= 0, flock(handle, LOCK_EX | LOCK_NB) == 0 else { exit(1) }
-guard let cfg = jsonObject(appHome.appendingPathComponent("data/runespace-team.json")),
+let visit = appHome.appendingPathComponent("data/runespace-visit.json")
+let visiting = FileManager.default.fileExists(atPath: visit.path)
+let configFile = visiting ? visit : appHome.appendingPathComponent("data/runespace-team.json")
+guard let cfg = jsonObject(configFile),
   let text = cfg["url"] as? String,
   var parsed = URLComponents(string: text), let hostname = parsed.host, parsed.user == nil,
   parsed.password == nil,
@@ -357,14 +369,21 @@ else { exit(2) }
 var settings: Object = [
   "invite": invite, "name": String((cfg["name"] as? String ?? NSFullUserName()).prefix(32)),
 ]
-if let owner = params.first(where: { $0.name == "owner" })?.value { settings["owner"] = owner }
+if !visiting, let owner = params.first(where: { $0.name == "owner" })?.value { settings["owner"] = owner }
 parsed.fragment = nil
 parsed.query = nil
 parsed.path = "/embedded-guild.html"
 guard let endpoint = parsed.url else { exit(2) }
+let snapshotKey = CommandLine.arguments[3]
+guard ["guild.snapshot", "runespace.snapshot"].contains(snapshotKey),
+  let roster = try? GuildRoster(directory: directory, snapshotKey: snapshotKey, endpoint: endpoint,
+                                invite: invite, owner: settings["owner"] as? String)
+else { exit(2) }
+settings["contributorKey"] = roster.contributorKey
+settings["shareAgents"] = settings["owner"] != nil || cfg["shareAgents"] as? Bool == true
 let app = NSApplication.shared
 app.setActivationPolicy(.prohibited)
-let call = GuildCall(directory: directory, endpoint: endpoint, settings: settings, parent: parent)
+let call = GuildCall(directory: directory, endpoint: endpoint, settings: settings, roster: roster, parent: parent)
 app.delegate = call
 app.run()
 Darwin.close(handle)

@@ -32,6 +32,11 @@ export function createAgentScene(sim) {
     const revision = JSON.stringify(agents);
     if (revision !== rosterRevision) {
       sim.sync(agents.map(agent => ({...agent, key:agent.id, host:'local'})));
+      // An owner may rejoin under a new display name without changing the agent’s job.
+      for (const agent of agents) {
+        const npc = sim.npcs.get(agent.id);
+        if (npc) Object.assign(npc, {ownerName:agent.ownerName, ownerId:agent.ownerId, hostAgent:agent.hostAgent});
+      }
       rosterRevision = revision;
     }
 

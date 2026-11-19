@@ -40,6 +40,10 @@ export function createHerdrActions({session, post, toast}) {
   }
   return {
     chat(agent) {
+      if (agent.hostAgent === false) {
+        toast(agent.name+' · '+(agent.ownerName || 'Teammate')+'’s agent.');
+        return;
+      }
       if (!session()?.canOpenChats) {
         toast(agent.name + ' · Agent conversations are available on the host’s Herdr desktop.');
         return;

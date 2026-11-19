@@ -178,7 +178,7 @@ export function createGuildWorld({canvas,labels,onMove,onInspect=()=>{},onAgent,
       if(human||showNames||hover===id)tag(id,id===self?name+' · you':name,p,human?'human':'agent',seen,2.22,human?null:()=>approachAgent(id));
       if(id===self&&p.hit>0)tag('player-hit',String(p.hit),p,'hit',seen,1.72);
     }
-    for(const p of sim.npcs.values())actor(p,p.name,p.key,false);
+    for(const p of sim.npcs.values())actor(p,p.ownerName ? p.name+' · '+p.ownerName : p.name,p.key,false);
     for(const p of peers.values())actor(p.id===self?{...sim.player,key:p.id}:p,p.name,p.id,true);
     surface.end();
     for(const [id,el] of tags)if(!seen.has(id)){el.remove();tags.delete(id);}

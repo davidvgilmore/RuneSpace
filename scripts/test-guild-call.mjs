@@ -74,3 +74,48 @@ test('all desktop world shortcuts enter the same embedded world', async () => {
   }
   assert.deepEqual(visited, Array(5).fill('world'));
 });
+
+test('a teammate can opt into contributing from the Herdr invite form and change that choice in the call', async () => {
+  const values = new Map([['runespace.callState',{configured:false}]]), buttons = new Map(), commands = [], tasks = [];
+  const cx = {notify(){}, focus_handle:()=>({focus(){}}), spawn(fn){tasks.push(fn(cx));}};
+  let config, state, navigated;
+  function element() {
+    let click;
+    const node = new Proxy({}, {get(_,key) {
+      if (key === 'id') return id => { buttons.set(id, node); return node; };
+      if (key === 'when') return (condition,fn) => { if (condition) fn(node); return node; };
+      if (key === 'on_click') return fn => { click = () => fn({},cx); return node; };
+      if (key === 'click') return click;
+      return () => node;
+    }});
+    return node;
+  }
+  const Call = await load('guild-call.js','GuildCall',{
+    View:class {},theme:()=>({}),closeOverlay(){},run(name){navigated=name;},Input:{new:element},div:element,h_flex:element,v_flex:element,
+    InputState:{new:()=>({on(){},value:()=>'Nyx'})},
+    appHome:()=>'/example',shared:k=>values.get(k),setShared:(k,v)=>values.set(k,v),
+    readTextFile:async path=>JSON.stringify(path.endsWith('runespace-team.json')?config:state),
+    exec:async (_cli,args)=>{
+      commands.push([...args]);
+      if (args[1]==='join') {
+        config={url:'https://guild.example/#invite=only-the-helper-reads-this',name:'Nyx',shareAgents:args.includes('--bring-agents')};
+        state={updatedAt:Date.now()/1000,status:'connected',connected:true,mediaConnected:true};
+      }
+      if (args[1]==='share-off') config.shareAgents=false;
+      return {code:0};
+    },
+  });
+  const view=new Call();view.init({mod:'runespace'},cx);
+  function render(){buttons.clear();view.render();}
+  async function drain(){while(tasks.length)await Promise.all(tasks.splice(0));}
+  render();
+  assert.ok(buttons.has('call-paste-join'));assert.equal(view.bringAgents,false);
+  buttons.get('call-bring-agents').click();render();
+  buttons.get('call-paste-join').click();await drain();render();
+  assert.equal(navigated,'runespace.world');
+  assert.deepEqual(commands[0].slice(-2),['--name=Nyx','--bring-agents']);
+  assert.ok(!buttons.has('call-change-guild'));assert.ok(buttons.has('call-share-off'));
+  buttons.get('call-share-off').click();await drain();render();
+  assert.ok(buttons.has('call-share-on'));assert.deepEqual(commands.map(args=>args[1]),['join','share-off']);
+  assert.ok(!JSON.stringify([...values]).includes('only-the-helper-reads-this'));
+});
