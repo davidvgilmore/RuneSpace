@@ -52,3 +52,39 @@ test('joins with devices off and late browser permission results cannot restart 
   assert.deepEqual(devices, []);
   assert.deepEqual(room.eventNames(), []);
 });
+
+test('microphone permission stays pending independently while camera can publish and mute', async () => {
+  const mic = control(), camera = control(), sound = control(), status = [];
+  let rejectMic;
+  class Room extends EventEmitter {
+    constructor() {
+      super();
+      this.remoteParticipants = new Map();
+      this.localParticipant = {
+        identity:'me', trackPublications:new Map(),
+        setMicrophoneEnabled:() => new Promise((_, reject) => { rejectMic = reject; }),
+        async setCameraEnabled(enabled) { this.isCameraEnabled = enabled; },
+      };
+    }
+    async connect() {}
+    async disconnect() {}
+  }
+  const media = createGuildMedia({tiles:{}, micButton:mic, cameraButton:camera, soundButton:sound, native:true,
+    sdk:{Room, RoomEvent:{}}, onStatus:(text, device) => status.push([device, text])});
+  await media.connect({});
+  const pending = mic.onclick();
+  assert.equal(mic['aria-busy'], 'true');
+  assert.equal(mic.disabled, true);
+  assert.equal(camera.disabled, false);
+  await camera.onclick();
+  assert.equal(camera['aria-pressed'], 'true');
+  await camera.onclick();
+  assert.equal(camera['aria-pressed'], 'false');
+  rejectMic(Object.assign(Error('Consent denied'), {name:'NotAllowedError'}));
+  await pending;
+  assert.equal(mic['aria-busy'], 'false');
+  assert.equal(mic.disabled, false);
+  assert.match(status.at(-1)[1], /Microphone access.*Privacy & Security/);
+  assert.equal(status.at(-1)[0], 'mic');
+  await media.disconnect();
+});

@@ -1,0 +1,35 @@
+<!doctype html>
+<meta charset="utf-8">
+<script>
+const streams = new Map(), busy = new Set();
+let error = '';
+async function toggle(kind) {
+  if (streams.has(kind)) {
+    for (const track of streams.get(kind).getTracks()) track.stop();
+    streams.delete(kind);
+    return;
+  }
+  busy.add(kind);
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({[kind === 'mic' ? 'audio' : 'video']: true});
+    streams.set(kind, stream);
+  } catch (e) {
+    error = e.name;
+  } finally {
+    busy.delete(kind);
+  }
+}
+window.runespaceSocial = {
+  start() {},
+  step(position, command) {
+    if (command) void toggle(command);
+    return {status:'connected', connected:true, mediaConnected:true, error, tiles:[],
+      visibility:document.visibilityState, mic:streams.has('mic'), camera:streams.has('camera'),
+      micPending:busy.has('mic'), cameraPending:busy.has('camera'),
+      labels:[...streams.values()].flatMap(s => s.getTracks().map(t => t.label))
+    };
+  },
+  stop() { for (const s of streams.values()) for (const t of s.getTracks()) t.stop(); }
+};
+window.webkit.messageHandlers.guild.postMessage('ready');
+</script>

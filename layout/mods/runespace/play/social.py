@@ -226,15 +226,17 @@ def main():
             initial = dict(status='connecting', connected=False, mediaConnected=False, mic=False, camera=False,
                            error='', message='Joining the guild…', tiles=[], peers=[], updatedAt=time.time(), running=True)
             atomic(folder / 'state.json', json.dumps(initial).encode())
-            with (folder / 'social.log').open('wb') as log:
-                snapshot = 'guild.snapshot' if Path(__file__).resolve().parents[1].name == 'guild-hall' else 'runespace.snapshot'
-                proc = subprocess.Popen([str(exe), str(home), str(parent), snapshot], stdin=subprocess.DEVNULL,
-                                        stdout=log, stderr=log, start_new_session=True, close_fds=True)
-            for _ in range(65):
+            snapshot = 'guild.snapshot' if Path(__file__).resolve().parents[1].name == 'guild-hall' else 'runespace.snapshot'
+            # LaunchServices gives the bundle its own camera and microphone consent
+            # identity. A child executable inherits the responsible agent or terminal.
+            log = folder / 'social.log'
+            log.write_bytes(b'')
+            subprocess.run(['/usr/bin/open', '-n', '-g', '-a', str(exe.parents[2]),
+                            '--stdout', str(log), '--stderr', str(log), '--args',
+                            str(home), str(parent), snapshot], check=True, timeout=12)
+            for _ in range(130):
                 if running(folder):
                     return {'ok': True, 'configured': True, 'running': True}
-                if proc.poll() is not None:
-                    break
                 time.sleep(.03)
             raise RuntimeError('The guild call helper could not start. Check data/runespace-social/social.log.')
         if kind == 'stop':

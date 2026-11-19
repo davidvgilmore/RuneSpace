@@ -118,4 +118,8 @@ test('a teammate can opt into contributing from the Herdr invite form and change
   buttons.get('call-share-off').click();await drain();render();
   assert.ok(buttons.has('call-share-on'));assert.deepEqual(commands.map(args=>args[1]),['join','share-off']);
   assert.ok(!JSON.stringify([...values]).includes('only-the-helper-reads-this'));
+  values.set('runespace.callState', {...values.get('runespace.callState'), mic:true, cameraPending:true});
+  render();
+  assert.equal(buttons.get('call-camera').click, undefined, 'waiting for camera consent disables just the camera control');
+  assert.equal(typeof buttons.get('call-mic').click, 'function', 'the live microphone can still be muted');
 });

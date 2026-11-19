@@ -31,6 +31,7 @@ async function readState() {
     if (Math.abs(Date.now() / 1000 - Number(state.updatedAt)) < 10) {
       return {
         connected: !!state.connected, mediaConnected: !!state.mediaConnected, mic: !!state.mic, camera: !!state.camera,
+        micPending: !!state.micPending, cameraPending: !!state.cameraPending,
         status: String(state.status || ''), audioBlocked: !!state.audioBlocked,
         names: (Array.isArray(state.peers) ? state.peers : []).map(p => String(p.name || 'Guest').slice(0, 32)),
         error: messageText(state.error), message: state.mediaConnected ? '' : messageText(state.message),
@@ -165,7 +166,9 @@ export class GuildCall extends View {
     const presence = {connecting: 'Joining the guild…', offline: 'Reconnecting…', stopped: 'Call ended'};
     const status = connected ? (names.length ? 'Here with you · ' + names.join(', ') : (state.displayName ? 'Here as ' + state.displayName : 'You are here'))
       : busy === 'start' ? 'Joining the guild…' : presence[state.status] || 'Disconnected';
-    const note = shared(noteKey) || state.error || state.message ||
+    const starting = [state.micPending && !state.mic && 'microphone', state.cameraPending && !state.camera && 'camera'].filter(Boolean);
+    const captureNote = starting.length ? 'Starting ' + starting.join(' and ') + '… Allow access if macOS asks.' : '';
+    const note = state.error || captureNote || shared(noteKey) || state.message ||
       (connected && !state.mediaConnected ? 'Guild voice and video are unavailable.' : '');
     const command = (action, label, active = false, disabled = false) =>
       actionButton('call-' + action, label, (_e, cx) => send(cx, this.mod, action,
@@ -197,8 +200,10 @@ export class GuildCall extends View {
       .when(!setup, el => el
         .child(div().truncate().text_size(14).text_color(connected ? t.working : t.muted).child(status))
         .when(!!state.configured, section => section.child(h_flex().gap(8)
-          .child(command('mic', state.mic ? 'Mic on' : 'Mic off', state.mic, !state.mediaConnected))
-          .child(command('camera', state.camera ? 'Camera on' : 'Camera off', state.camera, !state.mediaConnected))
+          .child(command('mic', state.micPending ? 'Mic…' : state.mic ? 'Mic on' : 'Mic off',
+            state.mic, !state.mediaConnected || state.micPending))
+          .child(command('camera', state.cameraPending ? 'Camera…' : state.camera ? 'Camera on' : 'Camera off',
+            state.camera, !state.mediaConnected || state.cameraPending))
           .when(!!state.audioBlocked, row => row.child(command('sound', 'Enable sound', false, !state.mediaConnected)))))
         .when(!!state.configured, section => section.child(h_flex().gap(8)
           .when(!state.hosting, row => row.child(command(state.shareAgents ? 'share-off' : 'share-on',

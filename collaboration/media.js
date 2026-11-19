@@ -16,15 +16,17 @@ function label(button, text) {
   if (target.textContent !== text) target.textContent = text;
 }
 
-function deviceFailure(error, device) {
+function deviceFailure(error, device, native) {
   if (error?.name === 'NotAllowedError' || error?.name === 'PermissionDeniedError') {
+    if (native) return 'Check ' + device + ' access for RuneSpace Calls in System Settings → Privacy & Security, then try again.';
     return 'Allow ' + device.toLowerCase() + ' access in your browser, then try again.';
   }
-  if (error?.name === 'NotFoundError') return 'No ' + device.toLowerCase() + ' was found.';
+  if (['NotFoundError', 'DevicesNotFoundError'].includes(error?.name)) return 'No ' + device.toLowerCase() + ' was found.';
+  if (['NotReadableError', 'TrackStartError'].includes(error?.name)) return device + ' is unavailable. Check the device or close another app using it, then try again.';
   return device + ' could not start. Check your device and try again.';
 }
 
-export function createGuildMedia({tiles, micButton, cameraButton, soundButton, onStatus = () => {}, onDevices = () => {}, adaptiveStream = true, sdk}) {
+export function createGuildMedia({tiles, micButton, cameraButton, soundButton, onStatus = () => {}, onDevices = () => {}, adaptiveStream = true, native = false, sdk}) {
   const doc = tiles.ownerDocument;
   const controls = [[micButton, 'mic', 'Mic'], [cameraButton, 'camera', 'Camera']];
   let active = null;
@@ -38,10 +40,12 @@ export function createGuildMedia({tiles, micButton, cameraButton, soundButton, o
     const mic = !!local?.isMicrophoneEnabled, camera = !!local?.isCameraEnabled;
     for (const [button, key, title] of controls) {
       const enabled = key === 'mic' ? mic : camera;
-      button.disabled = !active?.connected || active.pending.has(key);
+      const pending = active?.pending.has(key) === true;
+      button.disabled = !active?.connected || pending;
+      button.setAttribute('aria-busy', String(pending));
       button.setAttribute('aria-pressed', String(enabled));
       button.title = (enabled ? 'Turn off ' : 'Turn on ') + (key === 'mic' ? 'microphone' : 'camera');
-      label(button, title + (enabled ? ' on' : ' off'));
+      label(button, pending ? title + '…' : title + (enabled ? ' on' : ' off'));
     }
     soundButton.hidden = !active?.connected || (active.room.canPlaybackAudio !== false && active.room.canPlaybackVideo !== false);
     if (mic !== lastMic || camera !== lastCamera) {
@@ -211,7 +215,8 @@ export function createGuildMedia({tiles, micButton, cameraButton, soundButton, o
     if (!connection?.connected || connection.pending.has(key)) return;
     const local = connection.room.localParticipant;
     const mic = key === 'mic', enabled = mic ? local.isMicrophoneEnabled : local.isCameraEnabled;
-    if (!enabled && globalThis.isSecureContext === false) { onStatus('Use HTTPS or localhost to enable your mic and camera.'); return; }
+    if (!enabled && globalThis.isSecureContext === false) { onStatus('Use HTTPS or localhost to enable your mic and camera.', key); return; }
+    onStatus('', key);
     connection.pending.add(key); updateControls();
     try {
       const pub = mic ? await local.setMicrophoneEnabled(!enabled) : await local.setCameraEnabled(!enabled);
@@ -220,9 +225,8 @@ export function createGuildMedia({tiles, micButton, cameraButton, soundButton, o
         pub?.track?.stop();
         return;
       }
-      onStatus('');
     } catch (err) {
-      if (active === connection) onStatus(deviceFailure(err, mic ? 'Microphone' : 'Camera'));
+      if (active === connection) onStatus(deviceFailure(err, mic ? 'Microphone' : 'Camera', native), key);
     } finally {
       connection.pending.delete(key);
       if (active === connection) refresh();
@@ -234,6 +238,7 @@ export function createGuildMedia({tiles, micButton, cameraButton, soundButton, o
   soundButton.onclick = async () => {
     const connection = active;
     if (!connection?.connected) return;
+    onStatus('', 'sound');
     try {
       const room = connection.room;
       const starts = [];
@@ -241,7 +246,7 @@ export function createGuildMedia({tiles, micButton, cameraButton, soundButton, o
       if (room.canPlaybackVideo === false) starts.push(room.startVideo());
       await Promise.all(starts);
     } catch {
-      if (active === connection) onStatus('Playback is blocked. Enable sound for this site and try again.');
+      if (active === connection) onStatus('Playback is blocked. Enable sound for this site and try again.', 'sound');
     } finally { updateControls(); }
   };
   updateControls();

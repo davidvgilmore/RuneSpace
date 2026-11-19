@@ -10,7 +10,8 @@ const now = () => performance.now();
 const frameWidth = 144, frameHeight = 81;
 let config, session, socket, self, peers = [];
 let guildAgents = [], guildStations = [], sharing = false;
-let status = 'connecting', message = '', deviceError = '', mediaConnected = false, mediaBusy = false;
+const deviceErrors = new Map();
+let status = 'connecting', message = '', mediaConnected = false, mediaBusy = false;
 let retryAt = 0, mediaRetryAt = 0, joining = false, stopped = false;
 let sequence = 0, sentPose = '', sentRoster = '', lastMove = 0, lastRoster = 0, lastRosterSent = 0;
 let pose, lastTiles = 0, mediaGeneration = 0;
@@ -18,10 +19,14 @@ const can = document.createElement('canvas');
 can.width = frameWidth; can.height = frameHeight;
 const ctx = can.getContext('2d', {willReadFrequently:true});
 
-const media = createGuildMedia({tiles, micButton:mic, cameraButton:camera, soundButton:sound, adaptiveStream:false,
-  onStatus(text) {
+const media = createGuildMedia({tiles, micButton:mic, cameraButton:camera, soundButton:sound, adaptiveStream:false, native:true,
+  onStatus(text, device) {
+    if (device) {
+      if (text) deviceErrors.set(device, text);
+      else deviceErrors.delete(device);
+      return;
+    }
     message = text;
-    deviceError = /^(Allow |No |Camera|Microphone|Playback|Use HTTPS)/.test(text || '') ? text : '';
     if (text === 'Reconnecting voice and video…') mediaRetryAt = now() + 4000;
     if (text?.includes('disconnected')) { mediaConnected = false; mediaRetryAt = now() + 1500; }
   }
@@ -38,6 +43,7 @@ async function post(path, data, bearer) {
 
 function resetMedia() {
   mediaGeneration++;
+  deviceErrors.clear();
   mediaBusy = mediaConnected = false;
   media.setPositions(null, []);
   void media.disconnect().catch(() => {});
@@ -194,12 +200,13 @@ window.runespaceSocial = {
     sendRoster(time);
     if (command && ['mic','camera','sound'].includes(command)) {
       const button = element(command);
-      if (mediaConnected && !button.disabled) button.click();
-      else message = 'Voice and video are still connecting.';
+      if (!mediaConnected) message = 'Voice and video are still connecting.';
+      else if (!button.disabled) button.click();
     }
     return {status,connected:status==='connected',self:self?.id||null,peers,guildAgents,guildStations,mediaConnected,
       mic:mic.getAttribute('aria-pressed')==='true', camera:camera.getAttribute('aria-pressed')==='true',
-      audioBlocked:!sound.hidden, message, error:status==='offline'?message:deviceError, tiles:sampleTiles(time)};
+      micPending:mic.getAttribute('aria-busy')==='true', cameraPending:camera.getAttribute('aria-busy')==='true',
+      audioBlocked:!sound.hidden, message, error:status==='offline'?message:[...deviceErrors.values()].join(' '), tiles:sampleTiles(time)};
   },
   async stop() {
     stopped = true;status = 'offline';

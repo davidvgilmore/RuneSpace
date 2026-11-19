@@ -5,6 +5,10 @@ import Darwin
 import WebKit
 
 typealias Object = [String: Any]
+#if !GUILD_CAPTURE_FIXTURE
+typealias GuildDevices = AVCaptureDevice
+func callConfiguration() -> WKWebViewConfiguration { WKWebViewConfiguration() }
+#endif
 
 func jsonObject(_ file: URL) -> Object? {
   guard let data = try? Data(contentsOf: file) else { return nil }
@@ -22,7 +26,8 @@ final class GuildCall: NSObject, NSApplicationDelegate, WKNavigationDelegate, WK
   var shareAgents: Bool
   let parent: pid_t
   let web: WKWebView
-  let window: NSWindow
+  let window: NSPanel
+  let captureLabel = NSTextField(labelWithString: "")
   var timer: Timer?
   var ownerExit: DispatchSourceProcess?
   var loaded = false, queued = false, stopping = false
@@ -32,9 +37,13 @@ final class GuildCall: NSObject, NSApplicationDelegate, WKNavigationDelegate, WK
   var lastPositionStamp: Date?, latestPosition: Object?
   var pageGeneration = 0
   var enabled = Set<String>()
+  var requesting = Set<String>()
+  var readyToStart: [String] = []
+  var starting: [String: Date] = [:]
+  var presentingCapture = false
   var frames = Set<String>()
   var current: Object = [:]
-  var lastDeviceError = ""
+  var deviceErrors: [String: String] = [:]
 
   init(directory: URL, endpoint: URL, settings: Object, roster: GuildRoster, parent: pid_t) {
     self.directory = directory
@@ -43,29 +52,40 @@ final class GuildCall: NSObject, NSApplicationDelegate, WKNavigationDelegate, WK
     self.roster = roster
     self.shareAgents = settings["shareAgents"] as? Bool == true
     self.parent = parent
-    let config = WKWebViewConfiguration()
+    let config = callConfiguration()
     config.websiteDataStore = .nonPersistent()
     config.mediaTypesRequiringUserActionForPlayback = []
     if #available(macOS 14.0, *) { config.preferences.inactiveSchedulingPolicy = .none }
     let bounds = NSRect(x: 0, y: 0, width: 400, height: 320)
     web = WKWebView(frame: bounds, configuration: config)
-    window = NSWindow(contentRect: bounds, styleMask: .borderless, backing: .buffered, defer: false)
+    window = NSPanel(contentRect: bounds, styleMask: [.borderless, .nonactivatingPanel],
+                     backing: .buffered, defer: false)
     super.init()
     web.navigationDelegate = self
     web.uiDelegate = self
     web.configuration.userContentController.add(self, name: "guild")
-    window.contentView = web
+    let content = NSView(frame: bounds)
+    web.autoresizingMask = [.width, .height]
+    content.addSubview(web)
+    let badge = NSView()
+    badge.wantsLayer = true
+    badge.layer?.backgroundColor = NSColor(calibratedRed: 0.13, green: 0.12, blue: 0.09, alpha: 1).cgColor
+    badge.autoresizingMask = [.width, .height]
+    badge.frame = content.bounds
+    content.addSubview(badge)
+    captureLabel.textColor = NSColor(calibratedRed: 1, green: 0.94, blue: 0.77, alpha: 1)
+    captureLabel.font = .systemFont(ofSize: 13, weight: .medium)
+    captureLabel.frame = NSRect(x: 14, y: 10, width: 270, height: 18)
+    badge.addSubview(captureLabel)
+    window.contentView = content
     window.isReleasedWhenClosed = false
-  }
-  func applicationDidFinishLaunching(_ notification: Notification) {
-    // WebKit defers getUserMedia indefinitely in an unordered macOS window.
-    // Attach the call to WindowServer outside all displays without activating it.
-    let left = NSScreen.screens.map { $0.frame.minX }.min() ?? 0
-    window.setFrameOrigin(NSPoint(x: left - window.frame.width - 1000, y: 0))
     window.isExcludedFromWindowsMenu = true
     window.ignoresMouseEvents = true
-    window.alphaValue = 0.01
-    window.orderBack(nil)
+    window.hidesOnDeactivate = false
+    window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+  }
+  func applicationDidFinishLaunching(_ notification: Notification) {
+    placeWindow()
     let owner = DispatchSource.makeProcessSource(identifier: parent, eventMask: .exit, queue: .main)
     owner.setEventHandler { [weak self] in self?.finish() }
     owner.resume()
@@ -77,6 +97,69 @@ final class GuildCall: NSObject, NSApplicationDelegate, WKNavigationDelegate, WK
       self?.tick()
     }
     timer?.tolerance = 0.012
+  }
+  func applicationDidChangeScreenParameters(_ notification: Notification) { placeWindow() }
+  func placeWindow() {
+    if presentingCapture, let screen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? NSScreen.main {
+      // WebKit defers getUserMedia while document.hidden. Keep the call visible
+      // during device acquisition, including on fullscreen Spaces, without taking focus.
+      let area = screen.visibleFrame
+      window.setFrame(NSRect(x: area.maxX - 292, y: area.minY + 14, width: 278, height: 38), display: true)
+      window.level = .floating
+      window.alphaValue = 1
+      window.orderFrontRegardless()
+    } else {
+      let left = NSScreen.screens.map { $0.frame.minX }.min() ?? 0
+      window.setFrame(NSRect(x: left - 1400, y: 0, width: 400, height: 320), display: false)
+      window.alphaValue = 0.01
+      window.level = .normal
+      window.orderBack(nil)
+    }
+  }
+  func updateCaptureWindow() {
+    let pending = requesting.union(readyToStart).union(starting.keys)
+    if !pending.isEmpty {
+      let devices = pending.count > 1 ? "microphone and camera" : pending.contains("mic") ? "microphone" : "camera"
+      captureLabel.stringValue = "RuneSpace · Starting " + devices + "…"
+    }
+    let shouldPresent = !pending.isEmpty
+    if presentingCapture != shouldPresent {
+      presentingCapture = shouldPresent
+      placeWindow()
+    }
+  }
+  func resetCapture() {
+    enabled.removeAll()
+    requesting.removeAll()
+    readyToStart.removeAll()
+    starting.removeAll()
+    updateCaptureWindow()
+  }
+  func requestDevice(_ kind: String) {
+    guard current["mediaConnected"] as? Bool == true, !requesting.contains(kind),
+      !readyToStart.contains(kind), starting[kind] == nil else { return }
+    requesting.insert(kind)
+    updateCaptureWindow()
+    let generation = pageGeneration
+    let device: AVMediaType = kind == "mic" ? .audio : .video
+    func resolved(_ granted: Bool) {
+      guard !stopping, pageGeneration == generation, requesting.remove(kind) != nil else { return }
+      if granted && current["mediaConnected"] as? Bool == true {
+        enabled.insert(kind)
+        readyToStart.append(kind)
+      } else if !granted {
+        denied(kind)
+      }
+      updateCaptureWindow()
+    }
+    switch GuildDevices.authorizationStatus(for: device) {
+    case .authorized: resolved(true)
+    case .notDetermined:
+      GuildDevices.requestAccess(for: device) { granted in
+        DispatchQueue.main.async { resolved(granted) }
+      }
+    default: resolved(false)
+    }
   }
   func sameOrigin(_ url: URL?) -> Bool {
     guard let url else { return false }
@@ -112,42 +195,15 @@ final class GuildCall: NSObject, NSApplicationDelegate, WKNavigationDelegate, WK
       decisionHandler(.deny)
       return
     }
-    guard needed.allSatisfy({ enabled.contains($0.0) }) else {
-      decisionHandler(.deny)
-      return
+    // A click in Herdr obtains system consent before the page may start its device.
+    // The origin check and this allowlist also protect a newly navigated call page.
+    let permitted = !stopping && needed.allSatisfy { kind, device in
+      enabled.contains(kind) && GuildDevices.authorizationStatus(for: device) == .authorized
     }
-    func request(_ i: Int) {
-      guard i < needed.count else {
-        decisionHandler(.grant)
-        return
-      }
-      let (kind, device) = needed[i]
-      guard enabled.contains(kind), !stopping else {
-        decisionHandler(.deny)
-        return
-      }
-      switch AVCaptureDevice.authorizationStatus(for: device) {
-      case .authorized: request(i + 1)
-      case .notDetermined:
-        AVCaptureDevice.requestAccess(for: device) { ok in
-          DispatchQueue.main.async {
-            if ok && self.enabled.contains(kind) && !self.stopping {
-              request(i + 1)
-            } else {
-              self.denied(kind)
-              decisionHandler(.deny)
-            }
-          }
-        }
-      default:
-        denied(kind)
-        decisionHandler(.deny)
-      }
-    }
-    request(0)
+    decisionHandler(permitted ? .grant : .deny)
   }
   func denied(_ kind: String) {
-    lastDeviceError =
+    deviceErrors[kind] =
       "Allow RuneSpace Calls to use the " + (kind == "mic" ? "microphone" : "camera")
       + " in macOS Privacy & Security."
   }
@@ -178,7 +234,7 @@ final class GuildCall: NSObject, NSApplicationDelegate, WKNavigationDelegate, WK
     pageGeneration += 1
     loaded = false
     queued = false
-    enabled.removeAll()
+    resetCapture()
     retry = Date().addingTimeInterval(3)
     recordOffline("offline", "Could not load the guild call. Reconnecting…")
   }
@@ -242,9 +298,20 @@ final class GuildCall: NSObject, NSApplicationDelegate, WKNavigationDelegate, WK
       write(current)
       return
     }
+    var pageCommand: String?
     if let cmd, ["camera", "mic"].contains(cmd) {
-      lastDeviceError = ""
-      if current[cmd] as? Bool == true { enabled.remove(cmd) } else { enabled.insert(cmd) }
+      if current[cmd] as? Bool == true {
+        enabled.remove(cmd)
+        pageCommand = cmd
+      } else {
+        deviceErrors.removeValue(forKey: cmd)
+        requestDevice(cmd)
+      }
+    } else if cmd == "sound" { pageCommand = cmd }
+    if pageCommand == nil, !readyToStart.isEmpty {
+      let device = readyToStart.removeFirst()
+      starting[device] = Date()
+      pageCommand = device
     }
     queued = true
     let generation = pageGeneration
@@ -252,7 +319,7 @@ final class GuildCall: NSObject, NSApplicationDelegate, WKNavigationDelegate, WK
       "position": roster.project(position: position(), sharing: shareAgents),
       "command": NSNull(), "sharing": shareAgents,
     ]
-    if let cmd, ["mic", "camera", "sound"].contains(cmd) { args["command"] = cmd }
+    if let pageCommand { args["command"] = pageCommand }
     web.callAsyncJavaScript(
       "return window.runespaceSocial.step(position,command,sharing)", arguments: args, in: nil, in: .page
     ) { [weak self] result in
@@ -263,7 +330,20 @@ final class GuildCall: NSObject, NSApplicationDelegate, WKNavigationDelegate, WK
         return
       }
       self.lastReady = Date()
-      if snap["mediaConnected"] as? Bool != true { self.enabled.removeAll() }
+      if snap["mediaConnected"] as? Bool != true { self.resetCapture() }
+      for (kind, since) in self.starting {
+        let pending = snap[kind + "Pending"] as? Bool
+        // Older room servers report only the final device state and error.
+        if snap[kind] as? Bool == true || pending == false ||
+          (pending == nil && (!(snap["error"] as? String ?? "").isEmpty || Date().timeIntervalSince(since) > 30)) {
+          self.starting.removeValue(forKey: kind)
+          if snap[kind] as? Bool != true { self.enabled.remove(kind) }
+        }
+      }
+      self.updateCaptureWindow()
+      for kind in self.requesting.union(self.readyToStart).union(self.starting.keys) {
+        snap[kind + "Pending"] = true
+      }
       let tiles = (snap["tiles"] as? [Object] ?? []).prefix(8)
       var live = Set<String>()
       snap["tiles"] = tiles.compactMap { tile -> Object? in
@@ -292,9 +372,11 @@ final class GuildCall: NSObject, NSApplicationDelegate, WKNavigationDelegate, WK
         return info
       }
       self.clearFrames(except: live)
-      if !self.lastDeviceError.isEmpty {
-        snap["error"] = self.lastDeviceError
-        snap["message"] = self.lastDeviceError
+      if !self.deviceErrors.isEmpty {
+        let errors = ["mic", "camera"].compactMap { self.deviceErrors[$0] } + [snap["error"] as? String ?? ""]
+        let message = errors.filter { !$0.isEmpty }.joined(separator: " ")
+        snap["error"] = message
+        snap["message"] = message
       }
       self.write(snap)
     }
@@ -332,7 +414,7 @@ final class GuildCall: NSObject, NSApplicationDelegate, WKNavigationDelegate, WK
     guard !stopping else { return }
     stopping = true
     timer?.invalidate()
-    enabled.removeAll()
+    resetCapture()
     recordOffline("stopped", "")
     web.evaluateJavaScript("window.runespaceSocial?.stop()")
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { NSApp.terminate(nil) }
@@ -382,7 +464,7 @@ else { exit(2) }
 settings["contributorKey"] = roster.contributorKey
 settings["shareAgents"] = settings["owner"] != nil || cfg["shareAgents"] as? Bool == true
 let app = NSApplication.shared
-app.setActivationPolicy(.prohibited)
+app.setActivationPolicy(.accessory)
 let call = GuildCall(directory: directory, endpoint: endpoint, settings: settings, roster: roster, parent: parent)
 app.delegate = call
 app.run()
