@@ -1,0 +1,13 @@
+{
+  "name": "runespace-team-guild",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=22" },
+  "scripts": { "start": "node server.mjs", "test": "node --test test-*.mjs" },
+  "dependencies": {
+    "livekit-client": "2.24.1",
+    "livekit-server-sdk": "2.20.0",
+    "ws": "8.23.0"
+  }
+}

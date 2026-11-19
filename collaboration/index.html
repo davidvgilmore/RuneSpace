@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#23271e"><title>Guild commons · RuneSpace</title>
+<link rel="icon" href="data:,"><link rel="stylesheet" href="/style.css">
+<script defer src="/vendor/livekit-client.umd.min.js"></script><script type="module" src="/client.js"></script>
+</head><body>
+<header class="topbar"><div class="brand"><span class="crest" aria-hidden="true">♜</span><span>RuneSpace</span></div><span class="title-divider"></span><h1>Guild commons</h1>
+  <div class="top-actions"><span class="connection" id="connection">At the gate</span><button id="controls" class="small" type="button" aria-label="Show world controls">?</button><button id="leave" type="button" class="small" hidden>Leave guild</button></div>
+</header>
+<main id="scene">
+  <canvas id="world" aria-label="Guild world. Arrow keys to walk, WASD to move the camera, or click the ground." tabindex="-1"></canvas>
+  <div id="labels" aria-hidden="true"></div>
+  <section class="gate" id="gate" aria-labelledby="gate-title">
+    <div class="gate-title"><span class="gate-glyph" aria-hidden="true">♜</span><h2 id="gate-title">Enter the guild</h2></div>
+    <p>Meet your team by the fire. Walk up to another adventurer to talk.</p>
+    <form id="join-form"><label for="name">Your name</label><input id="name" name="name" required maxlength="32" autocomplete="nickname" placeholder="Adventurer name">
+    <div id="invite-field" hidden><label for="invite-code">Guild invite</label><input id="invite-code" autocomplete="off" spellcheck="false" type="password" placeholder="Paste your invite link or code"></div>
+    <button id="join" type="submit" class="primary">Enter guild <span aria-hidden="true">→</span></button></form>
+    <p class="feedback" id="gate-feedback" role="status"></p>
+  </section>
+  <button id="roster-toggle" class="roster-toggle small" aria-expanded="false" aria-controls="roster" hidden>Guild list</button>
+  <aside class="roster" id="roster" aria-label="Guild list" hidden>
+    <div class="roster-heading"><h2>Guild list</h2><button id="invite" class="small" type="button">Invite</button></div>
+    <h3>Adventurers <span id="peer-count">0</span></h3><ul id="peer-list"></ul>
+    <section id="agent-section" hidden><h3>Agents <span id="agent-count">0</span></h3><ul id="agent-list"></ul></section>
+  </aside>
+  <div id="media-tiles" aria-label="Nearby voice and video"></div>
+  <div id="dock" hidden>
+    <div class="devices">
+      <button id="mic" class="device" type="button" aria-pressed="false" disabled><i class="icon-mic" aria-hidden="true"></i><span data-media-label>Mic off</span></button>
+      <button id="camera" class="device" type="button" aria-pressed="false" disabled><i class="icon-camera" aria-hidden="true"></i><span data-media-label>Camera off</span></button>
+      <button id="sound" type="button" class="small" hidden>Enable sound</button><button id="retry-media" type="button" class="small" hidden>Reconnect voice</button>
+    </div>
+    <p id="media-note" role="status"></p>
+  </div>
+  <p id="toast" class="toast" role="status"></p>
+</main>
+<dialog id="help"><form method="dialog"><div class="dialog-title"><h2>World controls</h2><button class="small" value="close" aria-label="Close controls">×</button></div>
+<dl><dt>Walk</dt><dd>Arrow keys or click the ground</dd><dt>Orbit the camera</dt><dd>A / D</dd><dt>Tilt the camera</dt><dd>W / S</dd><dt>Zoom</dt><dd>Scroll wheel</dd><dt>Talk nearby</dt><dd>Turn on your mic and walk up to a teammate.</dd></dl></form></dialog>
+<dialog id="invite-dialog"><form method="dialog"><div class="dialog-title"><h2>Invite a teammate</h2><button class="small" value="close" aria-label="Close invitation">×</button></div>
+<label for="invite-link">Guild invite link</label><input id="invite-link" readonly><button id="copy-link" type="button" class="primary">Copy invite link</button></form></dialog>
+</body></html>

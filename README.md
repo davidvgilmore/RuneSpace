@@ -33,6 +33,10 @@ herdr-app do layout.switch '{"name":"runespace"}'
 
 The installer builds the world and places the mod, theme and layout in your Herdr app home. It uses `~/.config/herdr-app` by default and accepts `HERDR_APP_HOME` or `--app-home PATH`. Herdr itself updates through its usual channel. To update RuneSpace, run `git pull --ff-only` followed by `python3 scripts/install.py` in this checkout.
 
+## Team guild
+
+Open **Team guild** in Herdr to meet other people in the browser version of the guild. Teammates can follow an invite link, choose a name and walk up to each other for proximity voice and video. Mic and camera start off. The host can include the desktop’s working agents as read-only characters. Teammates only need a browser and network access to the host. [Host a team guild with LiveKit](collaboration/README.md)
+
 ## Around town
 
 | Action | Control |

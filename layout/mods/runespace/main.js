@@ -1,6 +1,6 @@
 import { View, div, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { props, theme, shared, setShared, exec, checking, openOverlay, closeOverlay, run, spaces, agents, machines, terminals, panes, focused, window as appWindow, setWindowTitle, nextCommand, appHome, readTextFile, writeTextFile, layout } from "herdr";
+import { props, theme, shared, setShared, exec, checking, openOverlay, closeOverlay, run, spaces, agents, machines, terminals, panes, focused, window as appWindow, setWindowTitle, notify, nextCommand, appHome, readTextFile, writeTextFile, layout } from "herdr";
 import GuildWorld from "./world.js";
 import GuildInventory from "./inventory.js";
 import { GameKeys } from "./play-keys.js";
@@ -59,6 +59,7 @@ export default class GuildHall extends View {
     if(c.startsWith("filter:") && (c.slice(7)==="all" || snapshot().hosts.some(h=>h.id===c.slice(7))))setShared("runespace.filter",c.slice(7));
     if(c==="overview")this.overview();if(c==="friends")this.toggleFriends();if(c==="refresh")this.refresh(cx);
     if(c==='world')this.enterWorld(cx);
+    if(c==='team-guild')this.openTeamGuild(cx);
     if(c==='world-embedded')this.enterWorld(cx);
     if(c==='world-classic')this.embedded();
     if(c==='world-window')this.openWindow(cx);
@@ -298,6 +299,17 @@ export default class GuildHall extends View {
     const open=!shared("runespace.friendsOpen");setShared("runespace.friendsOpen",open);
     run(open?"layout.show":"layout.hide",{id:"sidebar"});
   }
+  openTeamGuild(cx) {
+    cx.spawn(async cx=>{
+      try {
+        const settings=JSON.parse(await readTextFile(appHome()+'/data/runespace-team.json'));
+        if(!/^https:\/\/[^\s]+$|^http:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?\//i.test(settings?.url||''))throw Error();
+        cx.open_url(settings.url);
+      }catch(_){
+        notify({title:'Team guild setup',body:'Configure the host and invitation in data/runespace-team.json. See the Team guild guide in the RuneSpace README.'});
+      }
+    });
+  }
   header() {
     const t=theme(),d=snapshot(),working=d.agents.filter(a=>rosterStatus(a)==="working").length;
     if(shared("runespace.sessionFocus"))return h_flex().size_full().bg(t.chrome).px(14).gap(12).items_center()
@@ -305,6 +317,7 @@ export default class GuildHall extends View {
       .child(label("♜  RuneSpace",18,t.accent).font_family("Georgia"))
       .child(div().flex_1())
       .child(button('world-nav',isWorld(shared('runespace.mode'))?'Guild world':shared('runespace.fromWorld')?'← Guild world':'Guild world',(_e,cx)=>this.enterWorld(cx),isWorld(shared('runespace.mode'))))
+      .child(button('team-guild-nav','Team guild',(_e,cx)=>this.openTeamGuild(cx)))
       .when(isWorld(shared('runespace.mode')),e=>e.child(button('inventory-nav','Inventory',(_e,cx)=>this.openInventory(cx),shared('runespace.mode')==='inventory')))
       .child(button('music-nav','♫ Music',()=>this.openMusic()))
       .when(isWorld(shared('runespace.mode')),e=>e.child(button('window-nav','Pop out',(_e,cx)=>this.openWindow(cx))))
@@ -319,6 +332,7 @@ export default class GuildHall extends View {
       .child(div().flex_1())
       .child(V().items_end().gap(3).child(label(working+" on a quest",14,t.working)).child(label(d.agents.length+" in the Friends list",11,t.muted)))
       .child(button('world-nav','Guild world',(_e,cx)=>this.enterWorld(cx)))
+      .child(button('team-guild-nav','Team guild',(_e,cx)=>this.openTeamGuild(cx)))
       .child(button('music-nav','♫ Music',()=>this.openMusic()))
       .child(button('inventory-nav','Inventory',(_e,cx)=>this.openInventory(cx),shared('runespace.mode')==='inventory'))
       .child(button("ledger-nav","Guild ledger",()=>this.overview(),shared("runespace.mode")!=="terminals"))
