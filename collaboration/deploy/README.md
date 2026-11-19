@@ -1,6 +1,6 @@
 # Run the media backend on a dedicated Google VM
 
-The Herdr host continues serving the guild, its invite link, avatar positions and agent roster. A separate LiveKit process on the VM forwards camera and microphone tracks. Team devices need tailnet access to both hosts. Signaling goes through Tailscale HTTPS on TCP 8466. WebRTC media goes directly to the VM’s Tailscale IPv4 on UDP 7882.
+The Herdr host continues serving the guild, its invite link, avatar positions and agent roster. A separate LiveKit process on the VM forwards camera and microphone tracks. Team devices need tailnet access to both hosts. Signaling goes through Tailscale HTTPS on TCP 8466. WebRTC normally uses the VM’s Tailscale IPv4 on UDP 7882. If that path is unavailable, Herdr and browser clients can relay media over private TURN/TLS on TCP 443.
 
 ## Create and enroll the VM
 
@@ -21,7 +21,7 @@ gcloud compute instances create "$VM" --project="$PROJECT" --zone="$ZONE" \
 gcloud compute ssh "$VM" --project="$PROJECT" --zone="$ZONE" --tunnel-through-iap
 ```
 
-In the SSH session, install Tailscale and enroll this new node with the login URL printed by `tailscale up`. Choose the same tailnet as the guild host. Enable MagicDNS and Tailscale HTTPS certificates in its admin console if needed. Tailnet policy should grant your collaborators TCP 8466 and UDP 7882 on this VM. [Install Tailscale on Debian](https://tailscale.com/download/linux) · [Tailscale HTTPS certificates](https://tailscale.com/kb/1153/enabling-https)
+In the SSH session, install Tailscale and enroll this new node with the login URL printed by `tailscale up`. Choose the same tailnet as the guild host. Enable MagicDNS and Tailscale HTTPS certificates in its admin console if needed. Allow teammates to reach TCP 8466 for signaling, UDP 7882 for direct media, and TCP 443 for the TLS fallback on this VM. Port 443 must be available in the VM’s Tailscale Serve configuration. Use a Tailscale version whose Serve command supports PROXY protocol v2. [Install Tailscale on Debian](https://tailscale.com/download/linux) · [Tailscale HTTPS certificates](https://tailscale.com/kb/1153/enabling-https)
 
 ```sh
 curl -fsSL https://tailscale.com/install.sh -o /tmp/install-tailscale.sh
@@ -42,7 +42,9 @@ gcloud compute ssh "$VM" --project="$PROJECT" --zone="$ZONE" --tunnel-through-ia
   -- -T < /private/path/to/media-keys.json
 ```
 
-Alternatively, on the VM run `sudo python3 install-media.py --credentials /root/media-keys.json` with an owner-only input file. To pre-stage the release on a VM with restricted GitHub access, pass `--archive /path/to/livekit_1.13.11_linux_amd64.tar.gz`. The installer verifies the SHA-256 of the release and installs a systemd service with a dynamic user and a root-owned credential. Repeat runs with the same inputs preserve an active call. The installer checks local and tailnet signaling and confirms the actual listening sockets before printing the VM’s `wss://` endpoint. [Pinned LiveKit release](https://github.com/livekit/livekit/releases/tag/v1.13.11)
+Alternatively, on the VM run `sudo python3 install-media.py --credentials /root/media-keys.json` with an owner-only input file. To pre-stage the release on a VM with restricted GitHub access, pass `--archive /path/to/livekit_1.13.11_linux_amd64.tar.gz`. The installer verifies the SHA-256 of the release and installs a systemd service with a dynamic user and a root-owned credential. Repeat runs with the same inputs preserve an active call. The installer checks local and tailnet signaling, the TURN certificate, and the actual listening sockets before printing the VM’s `wss://` endpoint. Upgrading an older UDP-only installation with the existing keys restarts LiveKit once. Run the upgrade between calls. [Pinned LiveKit release](https://github.com/livekit/livekit/releases/tag/v1.13.11)
+
+Tailscale Serve terminates TURN TLS on TCP 443 and forwards it with PROXY protocol v2 to TCP 5349 on the VM’s own tailnet IPv4. LiveKit trusts PROXY headers from that single local address. Its authenticated TURN allocations bind UDP ports 40000–40999 on the same address and relay to the embedded SFU. Client tailnet access is needed only on the three client-facing ports above. Tailscale manages the TLS certificate. [LiveKit TURN deployment](https://docs.livekit.io/transport/self-hosting/deployment/) · [Tailscale Serve TCP forwarding](https://tailscale.com/docs/reference/tailscale-cli/serve)
 
 ## Switch the room service
 

@@ -10,6 +10,8 @@ import os
 from pathlib import Path
 import platform
 import shutil
+import socket
+import ssl
 import stat
 import subprocess
 import sys
@@ -28,7 +30,10 @@ CONFIG = Path('/etc/runespace-media/livekit.yaml')
 UNIT = Path('/etc/systemd/system/runespace-media.service')
 PROXY = 'http://127.0.0.1:7880'
 SIGNAL = '8466'
-PORTS = {('tcp', '7880'), ('udp', '7882')}
+TURN = '443'
+TURN_LISTENER = 5349
+RELAY_MIN, RELAY_MAX = 40000, 40999
+PORTS = {('tcp', '7880'), ('udp', '7882'), ('tcp', str(TURN_LISTENER))}
 UNIT_HEADER = '# Managed by RuneSpace install-media.py'
 
 
@@ -89,12 +94,17 @@ def read_keys(source):
     return keys
 
 
-def livekit_config(ip, keys):
+def livekit_config(host, ip, keys):
     # JSON is valid YAML. Quoting also keeps arbitrary key material out of YAML syntax.
     return json.dumps({
         'port': 7880, 'bind_addresses': ['127.0.0.1'],
         'rtc': {'tcp_port': 0, 'udp_port': 7882, 'node_ip': ip, 'use_external_ip': False,
                 'ips': {'includes': [ip + '/32']}},
+        'turn': {'enabled': True, 'domain': host, 'tls_port': TURN_LISTENER,
+                 'external_tls': True, 'bind_addresses': [ip],
+                 'proxy_protocol': True, 'proxy_protocol_trusted_cidrs': [ip + '/32'],
+                 'relay_range_start': RELAY_MIN, 'relay_range_end': RELAY_MAX,
+                 'allow_restricted_peer_cidrs': [ip + '/32']},
         'keys': {keys['key']: keys['secret']}, 'logging': {'level': 'warn'},
     }, indent=2) + '\n'
 
@@ -109,24 +119,39 @@ def tailnet():
     return host, ips[0]
 
 
-def route_exists(routes, host):
-    endpoint = host + ':' + SIGNAL
-    if any(key.endswith(':' + SIGNAL) and enabled for key, enabled in (routes.get('AllowFunnel') or {}).items()):
-        raise ValueError('Funnel is enabled on the media port. Use a private tailnet listener.')
-    if any(SIGNAL in (fg.get('TCP') or {}) for fg in (routes.get('Foreground') or {}).values()):
-        raise ValueError('The media port is in use by a foreground Tailscale Serve command.')
-    listeners = routes.get('TCP') or {}
-    web = {key: value for key, value in (routes.get('Web') or {}).items() if key.endswith(':' + SIGNAL)}
-    if SIGNAL not in listeners and not web:
+def route_exists(config, host, ip, port):
+    endpoint = host + ':' + port
+    if any(key.endswith(':' + port) and enabled for key, enabled in (config.get('AllowFunnel') or {}).items()):
+        raise ValueError(f'Funnel is enabled on port {port}. Use a private tailnet listener.')
+    for foreground in (config.get('Foreground') or {}).values():
+        if port in (foreground.get('TCP') or {}) or any(key.endswith(':' + port) for key in (foreground.get('Web') or {})):
+            raise ValueError(f'Tailscale port {port} belongs to a foreground Serve command.')
+    listeners = config.get('TCP') or {}
+    web = {key: value for key, value in (config.get('Web') or {}).items() if key.endswith(':' + port)}
+    if port not in listeners and not web:
         return False
-    if (listeners.get(SIGNAL) == {'HTTPS': True} and set(web) == {endpoint} and
-            web[endpoint].get('Handlers') == {'/': {'Proxy': PROXY}}):
+    if port == SIGNAL:
+        if (listeners.get(port) == {'HTTPS': True} and set(web) == {endpoint} and
+                web[endpoint].get('Handlers') == {'/': {'Proxy': PROXY}}):
+            return True
+    elif not web and listeners.get(port) == {'TCPForward': f'{ip}:{TURN_LISTENER}', 'TerminateTLS': host, 'ProxyProtocol': 2}:
         return True
-    raise ValueError('Tailscale port 8466 already belongs to a different handler. Existing routes were preserved.')
+    raise ValueError(f'Tailscale port {port} already belongs to a different handler. Existing routes were preserved.')
 
 
-def routes(host):
-    return route_exists(json.loads(output('tailscale', 'serve', 'status', '--json')) or {}, host)
+def routes(host, ip):
+    config = json.loads(output('tailscale', 'serve', 'status', '--json')) or {}
+    return {port: route_exists(config, host, ip, port) for port in (SIGNAL, TURN)}
+
+
+def configure_routes(host, ip):
+    # Check both ports before creating either route. Never replace an existing service or Funnel.
+    existing = routes(host, ip)
+    if not existing[SIGNAL]:
+        subprocess.run(['tailscale', 'serve', '--bg', '--yes', '--https=' + SIGNAL, PROXY], check=True)
+    if not existing[TURN]:
+        subprocess.run(['tailscale', 'serve', '--bg', '--yes', '--proxy-protocol=2', '--tls-terminated-tcp=' + TURN,
+                        f'tcp://{ip}:{TURN_LISTENER}'], check=True)
 
 
 def pid():
@@ -137,18 +162,22 @@ def pid():
 
 
 def sockets(ip, verify):
-    expected = {('tcp', '127.0.0.1:7880'), ('udp', ip + ':7882')}
+    expected = {('tcp', '127.0.0.1:7880'), ('udp', ip + ':7882'), ('tcp', f'{ip}:{TURN_LISTENER}')}
     owned = set()
     owner = pid()
     for line in output('ss', '-H', '-lnutp').splitlines():
         fields = line.split()
         proto, address = fields[0], fields[4]
         if owner and ('pid=' + owner + ',') in line:
+            # Each active TURN allocation opens a UDP socket on the same tailnet IP.
+            bound_ip, _, bound_port = address.rpartition(':')
+            if proto == 'udp' and bound_ip == ip and bound_port.isdigit() and RELAY_MIN <= int(bound_port) <= RELAY_MAX:
+                continue
             owned.add((proto, address))
         elif (proto, address.rsplit(':', 1)[-1]) in PORTS:
             raise ValueError('A different process owns media port ' + address + '.')
     if verify and owned != expected:
-        raise ValueError('LiveKit must listen only on 127.0.0.1 TCP 7880 and the tailnet IPv4 UDP 7882.')
+        raise ValueError('Unexpected LiveKit listeners. Check the loopback signaling, tailnet media, and TURN relay ports.')
 
 
 def put(path, data, mode):
@@ -207,6 +236,20 @@ def health(url, seconds):
         time.sleep(1)
 
 
+def check_turn_tls(host, seconds=45):
+    deadline = time.monotonic() + seconds
+    context = ssl.create_default_context()
+    while True:
+        try:
+            with socket.create_connection((host, int(TURN)), timeout=3) as raw:
+                with context.wrap_socket(raw, server_hostname=host):
+                    return
+        except OSError as exc:
+            if time.monotonic() >= deadline:
+                raise ValueError('Private TURN TLS did not become ready at ' + host + ':' + TURN) from exc
+            time.sleep(1)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     group = parser.add_mutually_exclusive_group(required=True)
@@ -224,7 +267,7 @@ def main():
         if not args.check:
             lock = stack.enter_context(open('/run/lock/runespace-media-install.lock', 'a'))
             fcntl.flock(lock, fcntl.LOCK_EX)
-        configured = routes(host)
+        configured = routes(host, ip)
         if not args.check:
             if UNIT.exists() and not UNIT.read_text().startswith(UNIT_HEADER + '\n'):
                 raise ValueError('Refusing to overwrite an existing unmanaged systemd unit.')
@@ -233,7 +276,9 @@ def main():
             changed_binary = install_binary(args.archive)
             CONFIG.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             os.chmod(CONFIG.parent, 0o700)
-            changed_config = put(CONFIG, livekit_config(ip, keys).encode(), 0o600)
+            # Prepare both private endpoints while an existing SFU keeps serving calls.
+            configure_routes(host, ip)
+            changed_config = put(CONFIG, livekit_config(host, ip, keys).encode(), 0o600)
             changed_unit = put(UNIT, unit_contents().encode(), 0o644)
             if changed_unit:
                 subprocess.run(['systemctl', 'daemon-reload'], check=True)
@@ -242,16 +287,15 @@ def main():
             subprocess.run(['systemctl', action, UNIT.name], check=True)
             health(PROXY, 30)
             sockets(ip, True)
-            if not routes(host):
-                subprocess.run(['tailscale', 'serve', '--bg', '--https=' + SIGNAL, PROXY], check=True)
-            configured = routes(host)
-        if not configured:
-            raise ValueError('The expected private signaling route is missing.')
+            configured = routes(host, ip)
+        if not all(configured.values()):
+            raise ValueError('A private signaling or TURN/TLS route is missing.')
         subprocess.run(['systemctl', 'is-active', '--quiet', UNIT.name], check=True)
         sockets(ip, True)
         health(PROXY, 5)
         health('https://' + host + ':' + SIGNAL, 45)
-        print('LiveKit ready at wss://' + host + ':' + SIGNAL + ' with ICE/UDP on ' + ip + ':7882.')
+        check_turn_tls(host)
+        print(f'LiveKit ready at wss://{host}:{SIGNAL} with direct UDP {ip}:7882 and private TURN/TLS {host}:{TURN}.')
 
 
 if __name__ == '__main__':
