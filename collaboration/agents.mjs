@@ -7,6 +7,8 @@ const guildClasses = new Map([
   ['Pi', 'druid'], ['Hermes', 'guildmaster'], ['Agent', 'adventurer'],
 ]);
 
+export const rosterId = key => createHmac('sha256', salt).update(key).digest('hex').slice(0, 18);
+
 function conversationTitle(source) {
   if (typeof source.name !== 'string') return null;
   const title = source.name.trim();
@@ -37,7 +39,7 @@ async function readEntries(file, mod) {
     if (!source || typeof source.key !== 'string' || !source.key || source.mapVisible === false || source.connectionUnavailable ||
         ['unknown', 'offline'].includes(source.presence) || !['working', 'idle', 'blocked', 'error'].includes(source.status)) continue;
     const kind = guildClasses.has(source.kind) ? source.kind : 'Agent';
-    const id = createHmac('sha256', salt).update(source.key).digest('hex').slice(0, 18);
+    const id = rosterId(source.key);
     roster.set(id, {id, kind, key:source.key, chatTitle:mod ? conversationTitle(source) : null, status: source.status === 'working' ? 'working' : 'idle'});
   }
   const serials = new Map();

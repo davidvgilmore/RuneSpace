@@ -366,9 +366,9 @@ export default class GuildWorld extends View {
     if(['metal','play','sound','world-recovery'].includes(shared('runespace.mode')))return div().relative().size_full().bg('#22281f')
       .child(panel().absolute().top(24).left(24).right(24)
         .child(text('The Guild Green',24,'#efcf76').font_family('Georgia'))
-        .child(text(shared('runespace.metalState')||'Open the game window to enter RuneSpace.',14))
+        .child(text(shared('runespace.metalState')||'Entering the Guild Green…',14))
         .child(text('Click a companion to walk over and open their conversation here.',13))
-        .child(h_flex().gap(8).child(button('embedded-world','Classic view',()=>{setShared('runespace.mode','world');exec('/usr/bin/python3',[appHome()+'/mods/runespace/metal/control.py','stop','--app-home',appHome()]);}))));
+        .when(shared('runespace.mode')!=='play',e=>e.child(button('retry-world','Return to Guild world',()=>run('runespace.world')))));
     const nearest=this.sim.nearest(),hovered=this.sim.npcs.get(this.hover),talking=hovered||nearest;
     const adventure=this.sim.adventure;
     const target=adventure.entities.find(e=>e.key===adventure.targetKey);

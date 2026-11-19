@@ -24,7 +24,7 @@ function deviceFailure(error, device) {
   return device + ' could not start. Check your device and try again.';
 }
 
-export function createGuildMedia({tiles, micButton, cameraButton, soundButton, onStatus = () => {}, onDevices = () => {}, sdk}) {
+export function createGuildMedia({tiles, micButton, cameraButton, soundButton, onStatus = () => {}, onDevices = () => {}, adaptiveStream = true, sdk}) {
   const doc = tiles.ownerDocument;
   const controls = [[micButton, 'mic', 'Mic'], [cameraButton, 'camera', 'Camera']];
   let active = null;
@@ -83,7 +83,7 @@ export function createGuildMedia({tiles, micButton, cameraButton, soundButton, o
     }
     if (!tile) {
       const node = doc.createElement('article'), caption = doc.createElement('span');
-      node.className = 'media-tile'; node.dataset.local = String(local);
+      node.className = 'media-tile'; node.dataset.local = String(local); node.dataset.identity = id;
       caption.className = 'media-name'; node.append(caption); tiles.append(node);
       tile = {node, caption, tracks: new Map()};
       participants.set(id, tile);
@@ -157,7 +157,7 @@ export function createGuildMedia({tiles, micButton, cameraButton, soundButton, o
       void old.room.disconnect(true).catch(() => {});
     }
     const room = new api.Room({
-      adaptiveStream: true, dynacast: true, publishDefaults: {stopMicTrackOnMute: true},
+      adaptiveStream, dynacast: true, publishDefaults: {stopMicTrackOnMute: true},
       videoCaptureDefaults: {resolution: {width: 640, height: 360, frameRate: 20}}
     });
     const connection = {room, connected: false, pending: new Set(), handlers: []};

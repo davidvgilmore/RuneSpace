@@ -25,9 +25,7 @@ let nearby=new Set(),lastList='',mediaStarting=false,mediaActive=false,toastTime
 function toast(message){$('toast').textContent=message;clearTimeout(toastTimer);toastTimer=setTimeout(()=>{$('toast').textContent='';},3200);}
 function status(message,state){$('connection').textContent=message;$('connection').dataset.state=state;}
 const herdr=createHerdrActions({session:()=>credentials,post,toast});
-$('herdr-world').addEventListener('click',()=>herdr.world());
 function worldVisible(inWorld){
-  $('herdr-world').hidden=!(inWorld&&credentials?.canOpenWorld);
   $('pack').hidden=!inWorld;$('gate').hidden=inWorld;$('leave').hidden=!inWorld;$('dock').hidden=!inWorld;
   $('roster').hidden=!inWorld;$('roster-toggle').hidden=!inWorld;$('invite').disabled=!invite;
 }

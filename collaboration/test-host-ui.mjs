@@ -18,9 +18,9 @@ test('only the desktop owner gets a chat action, and each action uses the opaque
   let identity={session:'test',canOpenChats:false};
   const actions=createHerdrActions({session:()=>identity, post:(...args)=>calls.push(args), toast(){}});
   const agent={id:'opaque',name:'Codex mage 1'};
-  await actions.chat(agent);await actions.world();
+  await actions.chat(agent);
   assert.deepEqual(calls,[]);
   identity={...identity,canOpenChats:true,canOpenWorld:true};
-  await actions.chat(agent);await actions.world();
-  assert.deepEqual(calls,[['/api/agent-chat',{id:'opaque'},'test'],['/api/herdr-world',undefined,'test']]);
+  await actions.chat(agent);
+  assert.deepEqual(calls,[['/api/agent-chat',{id:'opaque'},'test']]);
 });

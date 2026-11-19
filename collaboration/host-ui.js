@@ -45,9 +45,6 @@ export function createHerdrActions({session, post, toast}) {
         return;
       }
       return open('/api/agent-chat', {id:agent.id}, 'Conversation opened in Herdr.');
-    },
-    world() {
-      if (session()?.canOpenWorld) return open('/api/herdr-world', undefined, 'Personal guild opened in Herdr.');
     }
   };
 }

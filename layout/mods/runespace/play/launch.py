@@ -210,7 +210,7 @@ def launch(home, entry=None):
             replace_json(data / 'terminal-owner.json', {'owner':owner})
         # Version the name so an in-flight earlier build cannot take over the
         # new presenter. Older helpers stop on the new generation or desktop exit.
-        version = hashlib.sha256((binary+str(parent)).encode()+PRESENTER.read_bytes()+Path(__file__).read_bytes()).hexdigest()[:8]
+        version = hashlib.sha256((binary+str(parent)).encode()+PRESENTER.read_bytes()+(HERE/'guild_presence.py').read_bytes()+(HERE/'minimap.py').read_bytes()+Path(__file__).read_bytes()).hexdigest()[:8]
         name = f'runespace-world-{owner[:8]}-{version}'
         info = hc(exe, ['get','--json',name], missing_ok=True)
         reuse = info is not None and info.get('state') == 'live'

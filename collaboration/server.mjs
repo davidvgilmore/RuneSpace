@@ -7,8 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { WebSocket, WebSocketServer } from 'ws';
 import { AccessToken, TrackSource } from 'livekit-server-sdk';
 import { normalizeLoadout } from '../layout/mods/runespace/equipment.js';
-import { Simulation } from '../layout/mods/runespace/world-engine.js';
-import { readRosterViews } from './agents.mjs';
+import { Simulation, ACTIVITY } from '../layout/mods/runespace/world-engine.js';
+import { readRosterViews, rosterId } from './agents.mjs';
 import { createHostActions } from './host-actions.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -16,7 +16,8 @@ const worldFiles = resolve(here, '../layout/mods/runespace');
 const sdkDirectory = dirname(createRequire(import.meta.url).resolve('livekit-client'));
 const files = new Map([
   ['/', [join(here, 'index.html'), 'text/html']],
-  ...['style.css', 'client.js', 'media.js', 'world.js', 'adventure-profile.js', 'host-ui.js'].map(name => [
+  ['/embedded-guild.html', [join(here, 'embedded-guild.html'), 'text/html']],
+  ...['embedded-guild.js', 'style.css', 'client.js', 'media.js', 'agent-scene.js', 'world.js', 'adventure-profile.js', 'host-ui.js'].map(name => [
     '/' + name, [join(here, name), name.endsWith('.css') ? 'text/css' : 'text/javascript']
   ]),
   ...['world-engine.js', 'world-art.js', 'equipment.js'].map(name => [
@@ -68,7 +69,7 @@ export function settings(env = process.env) {
 }
 
 export function createRoomServer(options = {}) {
-  const { host = '127.0.0.1', port = 8787, livekit, agentRoster, resumeMs = 45_000, capacity = 32 } = options;
+  const { host = '127.0.0.1', port = 8787, livekit, agentRoster, resumeMs = 45_000, capacity = 32, sceneMaxAgeMs = 10_000 } = options;
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('Invalid room service port.');
   const invite = options.invite || secret();
   if (invite.length < 16 || invite.length > 512) throw new Error('Use an invitation of 16–512 characters.');
@@ -91,7 +92,7 @@ export function createRoomServer(options = {}) {
   const roomName = 'runespace-' + randomUUID();
   const sim = new Simulation();
   const sessions = new Map();
-  const sockets = new WebSocketServer({ noServer: true, maxPayload: 2048, perMessageDeflate: false });
+  const sockets = new WebSocketServer({ noServer: true, maxPayload: 32768, perMessageDeflate: false });
   const server = new Server();
   server.headersTimeout = 10_000;
   server.requestTimeout = 10_000;
@@ -101,11 +102,38 @@ export function createRoomServer(options = {}) {
     'http://127.0.0.1:', 'http://localhost:', 'http://[::1]:'
   ].some(base => value === base + server.address()?.port);
 
+  let sceneHost = null, sceneTimer;
+  function releaseScene(session) {
+    if (session !== sceneHost) return;
+    clearTimeout(sceneTimer);
+    sceneHost = null;
+    publish();
+  }
+  let guestIds = new Set();
+  function updateScene(session, entries) {
+    if (!session.nativeHost || !Array.isArray(entries) || entries.length > 64) return;
+    const scene = new Map();
+    for (const row of entries) {
+      if (!Array.isArray(row)) continue;
+      const [key, x, z, yaw, activity, moving] = row;
+      if (typeof key !== 'string' || key.length > 512 || ![x,z,yaw].every(Number.isFinite) ||
+          Math.abs(x)>20 || Math.abs(z)>19 || !Object.hasOwn(ACTIVITY, activity)) continue;
+      const id = rosterId(key);
+      scene.set(id, [id,x,z,normalizeAngle(yaw),activity,moving === true]);
+    }
+    if (!scene.size) { releaseScene(session); return; }
+    clearTimeout(sceneTimer);
+    sceneHost = session;
+    sceneTimer = setTimeout(() => releaseScene(session), sceneMaxAgeMs);
+    session.scene = [...scene.values()];
+    publish();
+  }
   function snapshot(session, peers) {
     const ws = session.socket;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     if (ws.bufferedAmount > 256 * 1024) { ws.terminate(); return; }
-    ws.send(JSON.stringify({ type: 'world', self: session.peer.id, peers, agents: session.isOwner ? agentViews.owner : agentViews.guests }));
+    const scene = sceneHost?.socket ? sceneHost.scene.filter(row => guestIds.has(row[0])) : [];
+    ws.send(JSON.stringify({ type: 'world', self: session.peer.id, peers, scene, agents: session.isOwner ? agentViews.owner : agentViews.guests }));
   }
   function publish() {
     if (broadcastTimer || stopping) return;
@@ -121,9 +149,9 @@ export function createRoomServer(options = {}) {
     readingRoster = true;
     try {
       const next = await readRosterViews(agentRoster, desktop?.mod);
-      if (JSON.stringify(next) !== JSON.stringify(agentViews)) { agentViews = next; publish(); }
+      if (JSON.stringify(next) !== JSON.stringify(agentViews)) { agentViews = next; guestIds = new Set(next.guests.map(a => a.id)); publish(); }
     } catch {
-      if (agentViews.guests.length) { agentViews = {guests: [], owner: []}; publish(); }
+      if (agentViews.guests.length) { agentViews = {guests: [], owner: []}; guestIds.clear(); publish(); }
     } finally { readingRoster = false; }
   }
 
@@ -157,8 +185,17 @@ export function createRoomServer(options = {}) {
     if (input.recover === true && input.x === 0 && input.z === 12) {
       peer.x = 0; peer.z = 12;
     }
+    const startX = peer.x, startZ = peer.z;
+    if (session.nativeHost || session.needsNativeSpawn) {
+      // A newly opened presenter can report its saved spawn after it joins the call.
+      if (!sim.blocked(input.x, input.z)) {
+        peer.x = input.x;
+        peer.z = input.z;
+        session.needsNativeSpawn = false;
+      } else if (session.needsNativeSpawn) return;
+    }
     const dx = input.x - peer.x, dz = input.z - peer.z, length = Math.hypot(dx, dz);
-    if (Number.isFinite(length) && length > 0) {
+    if (!session.nativeHost && Number.isFinite(length) && length > 0) {
       const fraction = Math.min(1, session.budget / length);
       const next = { x: peer.x + dx*fraction, z: peer.z + dz*fraction };
       if (sim.clearSegment(peer, next)) {
@@ -166,6 +203,7 @@ export function createRoomServer(options = {}) {
         Object.assign(peer, next);
       }
     }
+    peer.moving = typeof input.moving === 'boolean' ? input.moving : Math.hypot(startX-peer.x,startZ-peer.z) > .01;
     if (['idle', 'wood', 'attack', 'dance'].includes(input.activity)) peer.activity = input.activity;
     if (input.loadout && typeof input.loadout === 'object') peer.loadout = normalizeLoadout(input.loadout);
     peer.seq = input.seq;
@@ -195,7 +233,7 @@ export function createRoomServer(options = {}) {
       if (req.method !== 'POST' || !['/api/join', '/api/media', '/api/leave', '/api/agent-chat', '/api/herdr-world'].includes(path)) throw fail(404, 'Not found.');
       if (!allowedOrigin(req.headers.origin)) throw fail(403, 'Unexpected request origin.');
       if (path === '/api/join') {
-        const { invite: invitation, name, owner } = await body(req);
+        const { invite: invitation, name, owner, client, position } = await body(req);
         if (typeof invitation !== 'string' || !timingSafeEqual(digest(invitation), inviteHash)) throw fail(403, 'Invalid invitation.');
         if (typeof name !== 'string' || !name.trim() || [...name.trim()].length > 32 || /[\p{Cc}\p{Cf}]/u.test(name)) throw fail(400, 'Enter a display name of 1–32 characters.');
         if (sessions.size >= capacity) {
@@ -205,7 +243,12 @@ export function createRoomServer(options = {}) {
         const token = secret();
         const peer = spawn(name.trim());
         const isOwner = desktop?.authenticates(owner) === true;
-        sessions.set(token, { peer, isOwner, socket: null, expires: Date.now()+resumeMs, budget: 1, lastMove: performance.now() });
+        const nativeHost = isOwner && client === 'herdr';
+        if (client === 'herdr' && position && [position.x,position.z,position.yaw].every(Number.isFinite) && !sim.blocked(position.x,position.z)) {
+          Object.assign(peer, {x:position.x, z:position.z, yaw:normalizeAngle(position.yaw)});
+        }
+        const needsNativeSpawn = client === 'herdr' && !nativeHost && position == null;
+        sessions.set(token, { peer, isOwner, nativeHost, needsNativeSpawn, socket: null, expires: Date.now()+resumeMs, budget: 1, lastMove: performance.now() });
         return reply(res, 201, { id: peer.id, session: token, media: Boolean(livekit), canOpenChats: isOwner && Boolean(agentRoster), canOpenWorld: isOwner });
       }
       const auth = req.headers.authorization;
@@ -214,13 +257,16 @@ export function createRoomServer(options = {}) {
       if (!session) throw fail(401, 'Rejoin the guild to continue.');
       if (path === '/api/leave') {
         sessions.delete(token);
-        session.socket?.close(1000, 'Left the guild');
+        releaseScene(session);
+        const socket = session.socket;
+        session.socket = null;
+        socket?.close(1000, 'Left the guild');
         publish();
         return reply(res, 200, { ok: true });
       }
       if (path === '/api/agent-chat' || path === '/api/herdr-world') {
-        if (!session.isOwner) throw fail(403, 'Desktop conversations and the personal guild belong to the host.');
-        if (!session.socket) throw fail(409, 'Reconnect to the team guild to open Herdr.');
+        if (!session.isOwner) throw fail(403, 'Desktop actions are available to the guild host.');
+        if (!session.socket) throw fail(409, 'Reconnect to the guild to open Herdr.');
         if (path === '/api/agent-chat') await desktop.openChat((await body(req)).id);
         else await desktop.openWorld();
         return reply(res, 200, {ok: true});
@@ -265,11 +311,14 @@ export function createRoomServer(options = {}) {
         session.socket = ws;
         previous?.close(4001, 'Session resumed elsewhere');
         publish();
-      } else if (session.socket === ws && message?.type === 'move') move(session, message);
+      } else if (session.socket === ws) {
+        if (message?.type === 'move') move(session, message);
+        else if (message?.type === 'scene') updateScene(session, message.agents);
+      }
     });
     ws.on('close', () => {
       clearTimeout(helloTimer);
-      if (session?.socket === ws) { session.socket = null; session.expires = Date.now()+resumeMs; publish(); }
+      if (session?.socket === ws) { session.socket = null; releaseScene(session); session.expires = Date.now()+resumeMs; publish(); }
     });
   });
   return {
@@ -290,7 +339,7 @@ export function createRoomServer(options = {}) {
     },
     async close() {
       stopping = true;
-      clearInterval(maintenance); clearInterval(refreshTimer); clearTimeout(broadcastTimer);
+      clearInterval(maintenance); clearInterval(refreshTimer); clearTimeout(broadcastTimer); clearTimeout(sceneTimer);
       for (const ws of sockets.clients) ws.terminate();
       sockets.close();
       sessions.clear();

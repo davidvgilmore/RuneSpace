@@ -13,6 +13,7 @@ struct Actor: Decodable {
     let hit: Int?
     let posePhase: Double?
     let parts: [String]?
+    let loadout: [String:String]?
     var elevation: Float { x > -18.8 && x < -13.3 && z > 1.9 && z < 4.1 ? 0.43 : 0 }
     let guildClass: String
     let height: Float
@@ -34,10 +35,11 @@ struct AdventureEntity: Decodable {
 
 enum WorldPick {
     case agent(Actor)
+    case human(Actor)
     case adventure(AdventureEntity)
 
     var key: String {
-        switch self { case .agent(let a): return a.key; case .adventure(let a): return a.key }
+        switch self { case .agent(let a), .human(let a): return a.key; case .adventure(let a): return a.key }
     }
     var agent: Actor? { if case .agent(let a) = self { return a }; return nil }
     var entity: AdventureEntity? { if case .adventure(let a) = self { return a }; return nil }
@@ -62,7 +64,7 @@ struct AdventureState: Decodable {
 
 struct GuildFrame: Decodable {
     let player: Actor
-    let npcs: [Actor]
+    let npcs, humans: [Actor]
     let adventure: AdventureState
     let arrived: String?
     let time: Double
@@ -112,7 +114,7 @@ final class WorldEngine {
         savedAdventure = try adventureURL.flatMap(Self.loadAdventure)
         context.exceptionHandler = { _, error in NSLog("Guild simulation: %@", error?.toString() ?? "error") }
         context.evaluateScript(try String(contentsOf: bundle, encoding: .utf8), withSourceURL: bundle)
-        for name in ["guildInit","guildSync","guildEquipment","guildFrame","guildWalk","guildTalk","guildInteract","guildSaveAdventure","guildMergedAdventure","guildReconcileAdventure","guildDance","guildStop","guildBenchmark"] {
+        for name in ["guildInit","guildSync","guildTeamSync","guildVisit","guildEquipment","guildFrame","guildWalk","guildTalk","guildInteract","guildSaveAdventure","guildMergedAdventure","guildReconcileAdventure","guildDance","guildStop","guildBenchmark"] {
             guard let fn = context.objectForKeyedSubscript(name), fn.isObject else { throw problem("Missing simulation function " + name) }
             functions[name] = fn
         }
@@ -164,6 +166,7 @@ final class WorldEngine {
     func interact(_ pick: WorldPick) {
         switch pick {
         case .agent(let agent): call("guildTalk", [agent.key])
+        case .human(let human): call("guildVisit", [human.x, human.z])
         case .adventure(let entity): call("guildInteract", [entity.key])
         }
     }
@@ -246,6 +249,8 @@ struct GPUCamera {
             .max(by: { screen($0.x,0,$0.z).y < screen($1.x,0,$1.z).y }) { return .agent(actor) }
         if let entity = frame.adventure.entities.filter({ $0.visible && hits($0.x,$0.z,0,$0.pickHeight,$0.radius) })
             .max(by: { screen($0.x,0,$0.z).y < screen($1.x,0,$1.z).y }) { return .adventure(entity) }
+        if let human = frame.humans.filter({ hits($0.x,$0.z,$0.elevation,$0.height,0.47) })
+            .max(by: { screen($0.x,0,$0.z).y < screen($1.x,0,$1.z).y }) { return .human(human) }
         return nil
     }
     func ground(_ point: CGPoint) -> SIMD2<Float> {
@@ -500,8 +505,9 @@ final class GPUScene {
                  next:count > 1 ? mesh(prefix+String((index+1)%count)) : nil,fraction:Float(phase-Double(index)))
         }
         var inView=0
-        for a in frame.npcs+[frame.player] {
-            let player = a.key==frame.player.key
+        for a in frame.npcs + frame.humans + [frame.player] {
+            let local = a.key == frame.player.key
+            let player = a.parts != nil
             let bridge=a.elevation
             if !player {
                 let head=camera.screen(a.x,a.height+bridge,a.z),feet=camera.screen(a.x,bridge,a.z)
@@ -509,7 +515,7 @@ final class GPUScene {
                 if bounds.contains(head) && bounds.contains(feet) {inView+=1}
             }
             draw(decals["shadow"],at:a.x,a.z,0,bridge+0.066)
-            if player || a.key==hovered {draw(decals["ring"],at:a.x,a.z,0,bridge+0.071)}
+            if local || a.key==hovered {draw(decals["ring"],at:a.x,a.z,0,bridge+0.071)}
             let kind=player ? "Player":a.kind ?? "Adventurer", host=player ? "local":a.host ?? "local"
             let job=a.activity ?? "idle"
             let activity=a.moving ? "walk" : clips[job] != nil ? job : "idle"

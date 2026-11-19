@@ -19,6 +19,7 @@ import time
 import tty
 import zlib
 from minimap import Minimap
+from guild_presence import GuildPresence
 
 ESC = b'\x1b'
 CSI = ESC + b'['
@@ -459,6 +460,8 @@ def render_loop(binary, directory):
         stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=open(directory/'renderer.log','ab'),bufsize=0)
     read=process.stdout.readline
     compressor=FrameCompressor()
+    guild=GuildPresence(DATA)
+    last_world_frame={}
     try:
         if json.loads(read()).get('type')!='ready':raise RuntimeError('Metal renderer could not start')
         controls=Controls()
@@ -504,11 +507,15 @@ def render_loop(binary, directory):
                 bench=None
             controls.interacted=False
             request.update(type='frame',width=width,height=height,slot=index%3,keys=keys,names=controls.names,hudScale=hud_scale)
+            guild.read(request,now)
             process.stdin.write(json.dumps(request,separators=(',',':')).encode()+b'\n')
             line=read()
             if not line:raise RuntimeError('Metal renderer stopped')
             frame=json.loads(line)
             if frame.get('type')!='frame':raise RuntimeError(str(frame.get('error',frame.get('type'))))
+            if bench is None and 'benchmark' not in request:
+                last_world_frame=frame
+                guild.publish(frame,now)
             if frame.get('arrived') or controls.leave:
                 handoff(controls.leave or 'chat',frame,frame.get('arrived'));break
             if music:
@@ -519,10 +526,12 @@ def render_loop(binary, directory):
                 if pixels.readinto(raw)!=len(raw):raise ValueError('Incomplete Metal frame')
             controls.map.resize(w,h,hud_scale)
             controls.map.compose(raw,frame,now)
+            guild.compose(raw,w,h)
             agents=frame.get('agents',[])
             selected=next((a for a in agents if a['key']==(frame.get('hovered') or frame.get('nearest'))),None)
             target=(selected.get('name') or selected['key']) if selected else ''
             title=safe_title(frame.get('adventureStatus') or 'THE GUILD GREEN   ·   '+(target or f'{len(agents)} companions'),cols-1)
+            if guild.member_count>1:title=safe_title(f'{guild.member_count} people   ·   '+title,cols-1)
             footer=safe_title(FOOTER_BUTTONS+'   Click oak to chop · creature to fight · agent to chat   Arrows or click to walk   W/S tilt   A/D orbit   Scroll to zoom',cols-1)
             hud=(CSI+b'1;1H'+CSI+b'2K'+CSI+b'1;33m'+title.encode()+CSI+b'0m'+f'\x1b[{rows};1H'.encode()+CSI+b'2K'+footer.encode())
             upload,placement=kitty_image(raw,w,h,cols,rows-2,index,compressor)
@@ -533,13 +542,14 @@ def render_loop(binary, directory):
             if now-last_save>=2 and bench is None:
                 last_save=now
                 pose={k:frame[k] for k in ('x','z','yaw','pitch','zoom')}
+                pose['heading']=frame.get('teamPose',{}).get('yaw',0)
                 if pose!=saved:
                     atomic_json(DATA/'runespace-play-position.json',dict(pose,at=int(time.time()*1000)))
                     saved=pose
             if report and not music:
                 player={'x':frame['x'],'z':frame['z'],'activity':frame.get('playerActivity','idle')}
                 if frame.get('dancePhase') is not None:player['dancePhase']=frame['dancePhase']
-                atomic_json(EVENT,dict(kind='report',id=int(time.time()*1000),report={**{k:frame[k] for k in ('yaw','pitch','zoom','width','height')},'player':player,'npcs':agents,'nearest':frame.get('nearest'),'adventure':frame.get('adventure')}))
+                atomic_json(EVENT,dict(kind='report',id=int(time.time()*1000),report={**{k:frame[k] for k in ('yaw','pitch','zoom','width','height')},'player':player,'npcs':agents,'teammates':frame.get('teamCharacters',[]),'videoTiles':len(guild.tiles),'nearest':frame.get('nearest'),'adventure':frame.get('adventure')}))
             if bench:
                 bench.sent(frame,sent_time,len(upload))
             if finished:
@@ -548,6 +558,12 @@ def render_loop(binary, directory):
             deadline=max(deadline+1/RATE,time.monotonic()-.002)
             time.sleep(max(0,deadline-time.monotonic()))
     finally:
+        if last_world_frame:
+            # Closing a chat or inventory can re-enter before Herdr's next pose poll.
+            pose={k:last_world_frame[k] for k in ('x','z','yaw','pitch','zoom')}
+            pose['heading']=last_world_frame.get('teamPose',{}).get('yaw',0)
+            atomic_json(DATA/'runespace-play-position.json',dict(pose,at=int(time.time()*1000)))
+        guild.publish(last_world_frame,time.monotonic(),leaving=True)
         compressor.close()
         process.stdin.close()
         try:process.wait(timeout=2)

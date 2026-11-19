@@ -15,7 +15,7 @@ def rgba(hex_rgb):
 EDGE, BRONZE, GILT = map(rgba, ('2d261b', '947348', 'e3bf7a'))
 MOSS, GRASS, WATER, TRAIL = map(rgba, ('718053', '788658', '53838e', 'c1ae7d'))
 TREE, ORE, ROOF, TIMBER = map(rgba, ('405638','929082','955f46','645746'))
-AGENT, ALERT, PLAYER = map(rgba, ('f5d36a','ef884e','fff9d9'))
+AGENT, ALERT, TEAMMATE, PLAYER = map(rgba, ('f5d36a','ef884e','72ddb1','fff9d9'))
 
 
 class Minimap:
@@ -126,6 +126,10 @@ class Minimap:
                 color = ALERT if agent['status'] in ('blocked','error') else AGENT
                 self.dot(self.pixels,x,y,EDGE,rim)
                 self.dot(self.pixels,x,y,color,radius)
+            for teammate in frame.get('teamCharacters', []):
+                x,y = self.local(teammate['x'],teammate['z'])
+                self.dot(self.pixels,x,y,EDGE,rim)
+                self.dot(self.pixels,x,y,TEAMMATE,radius)
             x,y = self.local(frame['x'],frame['z'])
             heading = frame['yaw']
             for step in range(max(1,round(5*self.hud_scale))):

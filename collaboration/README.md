@@ -1,6 +1,6 @@
-# Host a team guild
+# Host a shared Guild world
 
-The host runs the RuneSpace room service for invitations, avatars and agent presence. LiveKit carries human voice and video. Each browser sends its tracks to LiveKit once. Browsers subscribe to nearby teammates as their characters move. This is one shared media room for trusted invitees. Anyone admitted to that room has permission to subscribe to published tracks.
+The host runs the RuneSpace room service for invitations, avatars and agent presence. LiveKit carries human voice and video. Each participant sends their tracks to LiveKit once. Herdr and browser clients subscribe to nearby teammates as their characters move. This is one shared media room for trusted invitees. Anyone admitted to that room has permission to subscribe to published tracks.
 
 ## Try the world locally
 
@@ -70,8 +70,6 @@ Create `~/.config/herdr-app/data/runespace-team.json` (or the same path under `H
 {"url":"https://YOUR-HOST.YOUR-TAILNET.ts.net:8465/#invite=YOUR_RANDOM_GUILD_INVITE"}
 ```
 
-For the host's desktop controls, add `RUNESPACE_OWNER_TOKEN` (a separate random value of at least 32 characters), `RUNESPACE_HERDR_CLI` (the absolute path from `command -v herdr-app`), and `RUNESPACE_HERDR_MOD` (the active guild layout, typically `runespace`) to the room service environment. Enable the agent roster to open chats. Add `&owner=YOUR_OWNER_TOKEN` to the URL in the private desktop file. Use **Invite** in the browser for teammates. It copies only the guest invite.
+For the host's desktop controls, add `RUNESPACE_OWNER_TOKEN` (a separate random value of at least 32 characters), `RUNESPACE_HERDR_CLI` (the absolute path from `command -v herdr-app`), and `RUNESPACE_HERDR_MOD` (the active guild layout, typically `runespace`) to the room service environment. Enable the agent roster to open chats. Add `&owner=YOUR_OWNER_TOKEN` to the URL in the private desktop file. Open **Guild world** in Herdr. **Call** lets you copy the guest invite, enable your microphone or camera, and leave the call. On first use, macOS may ask for device access. The invite button shares only the guest invitation.
 
-Click an agent in the host's guild list or walk up to one in the world to open its conversation in Herdr. **Personal guild ↗** opens the complete desktop game while the browser call continues. Invited teammates see agent roles and work status; private thread titles and desktop controls are available to the host.
-
-Click **Team guild** in the RuneSpace header. It opens the browser world where your teammates are. The desktop's **Guild world** opens the personal game and agent conversations.
+The desktop renders teammates and nearby cameras inside the Metal world. You can walk up to an agent, open its conversation, and return to the world while the call continues. Teammates follow the invite in a browser, choose a name and see the host’s position, outfit and actions. They see generic agent names, classes, activities and positions. The host’s conversations stay in Herdr. Without a configured room, the world still runs locally.

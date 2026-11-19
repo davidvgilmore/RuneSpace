@@ -1,7 +1,8 @@
 import { View, div, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { props, theme, shared, setShared, exec, checking, openOverlay, closeOverlay, run, spaces, agents, machines, terminals, panes, focused, window as appWindow, setWindowTitle, notify, nextCommand, appHome, readTextFile, writeTextFile, layout } from "herdr";
+import { props, theme, shared, setShared, exec, checking, openOverlay, closeOverlay, run, spaces, agents, machines, terminals, panes, focused, window as appWindow, setWindowTitle, nextCommand, appHome, readTextFile, writeTextFile, layout } from "herdr";
 import GuildWorld from "./world.js";
+import { GuildCall, callButton, enterGuildCall, watchGuildCall } from "./guild-call.js";
 import GuildInventory from "./inventory.js";
 import { GameKeys } from "./play-keys.js";
 import { rosterStatus } from "./roster-presence.js";
@@ -33,13 +34,20 @@ function heading(text, sub=null) { return V().gap(4).child(label(text,22,theme()
 
 export default class GuildHall extends View {
   init(p,cx) {
-    this.role=(props()||p||{}).role || "board";
+    const options=props()||p||{};
+    this.role=options.role || "board";
+    if(this.role==='call'){
+      this.call=cx.new(GuildCall,{mod:'runespace',overlay:options.overlay});
+      return;
+    }
     if(this.role==='board'){
       this.world=cx.new(GuildWorld);
       this.inventory=cx.new(GuildInventory);
     }
     if(checking()) return;
     if(this.role==="header") {
+      watchGuildCall(cx);
+      if(shared('runespace.mode')==='play')enterGuildCall(cx,'runespace');
       this.gameFocus=cx.focus_handle();
       const path=appHome()+'/data/runespace-play/held-keys.json';
       this.gameKeys=new GameKeys(()=>readTextFile(path),(text,expected)=>writeTextFile(path,text,expected));
@@ -58,11 +66,7 @@ export default class GuildHall extends View {
     if(c.startsWith("select:"))this.select(c.slice(7));
     if(c.startsWith("filter:") && (c.slice(7)==="all" || snapshot().hosts.some(h=>h.id===c.slice(7))))setShared("runespace.filter",c.slice(7));
     if(c==="overview")this.overview();if(c==="friends")this.toggleFriends();if(c==="refresh")this.refresh(cx);
-    if(c==='world')this.enterWorld(cx);
-    if(c==='team-guild')this.openTeamGuild(cx);
-    if(c==='world-embedded')this.enterWorld(cx);
-    if(c==='world-classic')this.embedded();
-    if(c==='world-window')this.openWindow(cx);
+    if(['world','team-guild','world-embedded','world-classic','world-window'].includes(c))this.enterWorld(cx);
     if(c==='inventory')this.openInventory(cx);
     if(c==='music')this.openMusic();
     if(c==='inventory-back'&&shared('runespace.mode')==='inventory')this.leaveInventory(cx);
@@ -142,13 +146,19 @@ export default class GuildHall extends View {
   }
   leaveInventory(cx) {
     const origin=shared('runespace.inventoryOrigin');
-    if(origin==='play')this.enterWorld(cx);
-    else if(origin==='metal')this.openWindow(cx);
-    else if(origin==='world')this.embedded();
+    if(['play','metal','world'].includes(origin))this.enterWorld(cx);
     else this.show(['sound','terminals','conversation'].includes(origin)?origin:'ledger');
   }
   enterWorld(cx) {
     if(this.startingGame)return;
+    enterGuildCall(cx,'runespace');
+    if(shared('runespace.mode')==='play' && shared('runespace.playTerminal') &&
+      gameBlock(layout())?.content?.terminal===shared('runespace.playTerminal') &&
+      this.attachedEntry===shared('runespace.metalSince')){
+      run('layout.select',{stack:'main-stack',child:'runespace-game'});
+      run('pane.focus',{terminal:shared('runespace.playTerminal')});
+      return;
+    }
     this.focus(true);
     const since=Date.now();
     setShared('runespace.playTerminal',null);this.show('play');setShared('runespace.metalSince',since);
@@ -236,23 +246,6 @@ export default class GuildHall extends View {
       cx.stop_propagation();cx.spawn(async()=>{await this.gameKeys.flush();});
     }
   }
-  openWindow(cx) {
-    if(this.launching)return;
-    this.focus(true);this.show('metal');
-    const since=Date.now();
-    setShared('runespace.metalSince',since);setShared('runespace.metalState','Opening the game window…');this.launching=true;
-    cx.spawn(async cx=>{
-      try {
-        const result=await metal('open');
-        if(result.code!==0)throw Error(result.stderr||result.stdout||'The game window could not open.');
-        if(shared('runespace.mode')!=='metal'){await metal('stop');return;}
-        setShared('runespace.metalState','The game window is open.');
-      } catch (err) {
-        if(shared('runespace.mode')==='metal')setShared('runespace.metalState','Game window unavailable. '+String(err).slice(-260));
-      } finally {this.launching=false;cx.notify();}
-    });
-  }
-  embedded() { this.focus(true);this.show('world'); }
   pollWorld(cx) {
     if(!['metal','play'].includes(shared('runespace.mode'))||this.checkingEvent)return;
     this.checkingEvent=true;
@@ -294,21 +287,10 @@ export default class GuildHall extends View {
       } finally {this.checkingEvent=false;}
     });
   }
-  overview() { this.focus(false);this.show("ledger"); }
+  overview() { setShared('runespace.fromWorld',false);this.focus(false);this.show("ledger"); }
   toggleFriends() {
     const open=!shared("runespace.friendsOpen");setShared("runespace.friendsOpen",open);
     run(open?"layout.show":"layout.hide",{id:"sidebar"});
-  }
-  openTeamGuild(cx) {
-    cx.spawn(async cx=>{
-      try {
-        const settings=JSON.parse(await readTextFile(appHome()+'/data/runespace-team.json'));
-        if(!/^https:\/\/[^\s]+$|^http:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?\//i.test(settings?.url||''))throw Error();
-        cx.open_url(settings.url);
-      }catch(_){
-        notify({title:'Team guild setup',body:'Configure the host and invitation in data/runespace-team.json. See the Team guild guide in the RuneSpace README.'});
-      }
-    });
   }
   header() {
     const t=theme(),d=snapshot(),working=d.agents.filter(a=>rosterStatus(a)==="working").length;
@@ -317,10 +299,9 @@ export default class GuildHall extends View {
       .child(label("♜  RuneSpace",18,t.accent).font_family("Georgia"))
       .child(div().flex_1())
       .child(button('world-nav',isWorld(shared('runespace.mode'))?'Guild world':shared('runespace.fromWorld')?'← Guild world':'Guild world',(_e,cx)=>this.enterWorld(cx),isWorld(shared('runespace.mode'))))
-      .child(button('team-guild-nav','Team guild',(_e,cx)=>this.openTeamGuild(cx)))
+      .child(callButton(button,'runespace'))
       .when(isWorld(shared('runespace.mode')),e=>e.child(button('inventory-nav','Inventory',(_e,cx)=>this.openInventory(cx),shared('runespace.mode')==='inventory')))
       .child(button('music-nav','♫ Music',()=>this.openMusic()))
-      .when(isWorld(shared('runespace.mode')),e=>e.child(button('window-nav','Pop out',(_e,cx)=>this.openWindow(cx))))
       .child(button("friends-nav",shared("runespace.friendsOpen")?"Hide friends":"Friends list",()=>this.toggleFriends(),shared("runespace.friendsOpen")))
       .child(button("ledger-nav","Guild overview",()=>this.overview()))
       .child(button("term-nav","Terminals",()=>this.show("terminals"),shared("runespace.mode")==="terminals"));
@@ -332,7 +313,7 @@ export default class GuildHall extends View {
       .child(div().flex_1())
       .child(V().items_end().gap(3).child(label(working+" on a quest",14,t.working)).child(label(d.agents.length+" in the Friends list",11,t.muted)))
       .child(button('world-nav','Guild world',(_e,cx)=>this.enterWorld(cx)))
-      .child(button('team-guild-nav','Team guild',(_e,cx)=>this.openTeamGuild(cx)))
+      .child(callButton(button,'runespace'))
       .child(button('music-nav','♫ Music',()=>this.openMusic()))
       .child(button('inventory-nav','Inventory',(_e,cx)=>this.openInventory(cx),shared('runespace.mode')==='inventory'))
       .child(button("ledger-nav","Guild ledger",()=>this.overview(),shared("runespace.mode")!=="terminals"))
@@ -415,6 +396,7 @@ export default class GuildHall extends View {
       .child(label('⌘⇧P  Commands',11,t.accent));
   }
   render() {
+    if(this.role==='call')return this.call;
     if(this.role==='header'){
       const header=this.header();
       if(!this.gameFocus||shared('runespace.mode')!=='play')return header;

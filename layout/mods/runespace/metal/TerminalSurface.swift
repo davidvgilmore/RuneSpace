@@ -65,6 +65,14 @@ private final class Targets {
     }
 }
 
+private struct TeamPeer: Codable {
+    let id, name: String
+    let x, z, yaw: Double
+    let moving: Bool?
+    let activity: String?
+    let loadout, gear: [String:String]?
+}
+
 private struct FrameRequest: Decodable {
     let type: String
     let width, height, slot: Int?
@@ -73,7 +81,8 @@ private struct FrameRequest: Decodable {
     let walk, click, pointer: [Double]?
     let talk: String?
     let home, nearest, cancel, names, dance, inspect: Bool?
-    let benchmark: String?
+    let benchmark, teamSelf: String?
+    let teamPeers: [TeamPeer]?
 }
 
 final class TerminalSurface {
@@ -90,6 +99,7 @@ final class TerminalSurface {
     private var previous: GuildFrame?
     private let labels = WorldLabels()
     private var pointer: CGPoint?
+    private var teamSelf = ""
     private var last=0.0, lastSync=0.0
 
     init(assets: URL, home: URL, directory: URL) throws {
@@ -99,11 +109,13 @@ final class TerminalSurface {
         samples=gpu.supportsTextureSampleCount(4) ? 4 : 1
         try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
         let saved=object(at:shared)
+        let lastPose=object(at:home.appendingPathComponent("data/runespace-play-position.json")) as? [String:Double]
+        let position=lastPose.flatMap { $0["x"] != nil && $0["z"] != nil ? $0 : nil }
         engine=try WorldEngine(bundle:assets.appendingPathComponent("engine.bundle.js"),
-                               saved:saved["runespace.worldPosition"] as? [String:Any] ?? [:],
+                               saved:position ?? (saved["runespace.worldPosition"] as? [String:Any] ?? [:]),
                                adventureURL:home.appendingPathComponent("data/runespace-adventure.json"))
         engine.sync(saved)
-        if let cam=saved["runespace.worldCamera"] as? [String:Double] {
+        if let cam=lastPose ?? (saved["runespace.worldCamera"] as? [String:Double]) {
             camera.restore(cam)
         }
         scene=try GPUScene(device:gpu,assetURL:assets.appendingPathComponent("assets.json"),format:.rgba8Unorm,samples:samples)
@@ -150,6 +162,11 @@ final class TerminalSurface {
         let now=CACurrentMediaTime(), dt=min(0.1,max(0.001,now-last))
         last=now
         if now-lastSync>1 {engine.sync(object(at:shared));lastSync=now}
+        if let identity = r.teamSelf { teamSelf = identity }
+        if let peers = r.teamPeers {
+            let snapshot = try JSONEncoder().encode(peers)
+            engine.call("guildTeamSync", [String(decoding:snapshot, as:UTF8.self), teamSelf])
+        }
         let keys=Set(r.keys ?? [])
         if r.benchmark == "begin" && savedCamera == nil {
             savedCamera=camera
@@ -193,7 +210,7 @@ final class TerminalSurface {
         blit.endEncoding()
         cb.commit();cb.waitUntilCompleted()
         guard cb.status == .completed else {throw cb.error ?? problem("Metal frame did not finish")}
-        if r.names == true || hover != nil || close != nil {
+        if r.names == true || hover != nil || close != nil || !frame.humans.isEmpty {
             labels.draw(frame:frame,camera:camera,target:hover ?? close.map(WorldPick.agent),names:r.names == true,
                         into:slot.buffer.contents(),width:w,height:h,hudScale:CGFloat(r.hudScale ?? 1))
         }
@@ -201,12 +218,22 @@ final class TerminalSurface {
             let p=camera.screen(a.x,a.elevation,a.z),head=camera.screen(a.x,a.elevation+a.height,a.z)
             return ["key":a.key,"name":a.name ?? a.key,"kind":a.kind ?? "Adventurer","host":a.host ?? "",
                     "activity":a.activity ?? "idle","status":a.status ?? "unknown","x":p.x,"y":p.y,"headY":head.y,
-                    "worldX":a.x,"worldZ":a.z]
+                    "worldX":a.x,"worldZ":a.z,"yaw":a.yaw,"moving":a.moving]
+        }
+        let loadout = frame.player.loadout ?? [:]
+        let teamPose: [String:Any] = ["x":frame.player.x, "z":frame.player.z, "yaw":frame.player.yaw,
+            "activity":frame.player.activity ?? "idle", "moving":frame.player.moving, "loadout":loadout, "gear":loadout]
+        let teamCharacters = frame.humans.map { actor -> [String:Any] in
+            let feet = camera.screen(actor.x,actor.elevation,actor.z)
+            let head = camera.screen(actor.x,actor.elevation+actor.height,actor.z)
+            return ["id":String(actor.key.dropFirst("human:".count)), "name":actor.name ?? "Teammate",
+                "x":actor.x, "z":actor.z, "yaw":actor.yaw, "activity":actor.activity ?? "idle", "moving":actor.moving,
+                "screenX":feet.x, "screenY":feet.y, "headY":head.y]
         }
         var response: [String:Any] = ["type":"frame","slot":n,"path":slot.file.path,"width":w,"height":h,"size":bytes,
               "at":CACurrentMediaTime(),"x":frame.player.x,"z":frame.player.z,"yaw":camera.yaw,"zoom":camera.zoom,"pitch":camera.pitch,
               "playerActivity":frame.player.activity ?? "idle","equipment":frame.player.parts ?? [],"dancePhase":(frame.player.activity == "dance" ? frame.player.posePhase : nil) as Any? ?? NSNull(),
-              "agents":actors,"arrived":arrived as Any? ?? NSNull(),"visible":visible,
+              "teamPose":teamPose,"teamCharacters":teamCharacters,"agents":actors,"arrived":arrived as Any? ?? NSNull(),"visible":visible,
               "hovered":hover?.key as Any? ?? NSNull(),"nearest":close?.key as Any? ?? NSNull()]
         if let status = frame.adventure.status(hover:hover?.entity) {
             response["adventureStatus"] = status.title + "  ·  " + status.detail

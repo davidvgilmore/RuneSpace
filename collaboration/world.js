@@ -1,6 +1,7 @@
 import {Simulation, Camera, Mesh, character, poseFor, animationPhase, clamp, clampPitch, hash, ACTIVITY, mergeAdventureProgress} from '/world/world-engine.js';
 import {normalizeLoadout, equipItem} from '/world/equipment.js';
 import {createAdventureProfile} from './adventure-profile.js';
+import {createAgentScene} from './agent-scene.js';
 import {buildAdventureModel} from '/world/world-art.js';
 
 const hats = ['red', 'green', 'purple', 'blue', 'white', 'yellow'];
@@ -88,7 +89,7 @@ export function createGuildWorld({canvas,labels,onMove,onInspect=()=>{},onAgent,
   let selected=surface.upload(ring);
   const poses=new Map(),tags=new Map(),peers=new Map();
   let keys={},self=null,enabled=false,camera,lastFrame=0,lastPaint=0,handle,seq=0,lastSend=0,lastPose=null;
-  let yaw=.24,pitch=.76,zoom=1.20,focus={x:-1.6,z:-1.7},hover=null,alive=true,previousRoster='',w=1,h=1;
+  let yaw=.24,pitch=.76,zoom=1.20,focus={x:-1.6,z:-1.7},hover=null,alive=true,w=1,h=1;
   const sent=new Map(),hits=[];
   let lastAdventure='',lastGear='',showNames=false;
   const listeners=new AbortController(),listen=(target,type,fn,options={})=>target.addEventListener(type,fn,{...options,signal:listeners.signal});
@@ -182,7 +183,8 @@ export function createGuildWorld({canvas,labels,onMove,onInspect=()=>{},onAgent,
     surface.end();
     for(const [id,el] of tags)if(!seen.has(id)){el.remove();tags.delete(id);}
   }
-  function sync({self:id,peers:members,agents=[]}){
+  const agentScene = createAgentScene(sim);
+  function sync({self:id,peers:members,agents=[],scene=[]}){
     const initial=!enabled||self!==id||!peers.has(id);
     self=id;
     const valid=new Set();
@@ -213,18 +215,18 @@ export function createGuildWorld({canvas,labels,onMove,onInspect=()=>{},onAgent,
       }
     }
     for(const id of peers.keys())if(!valid.has(id))peers.delete(id);
-    const revision=JSON.stringify(agents);
-    if(revision!==previousRoster){sim.sync(agents.map(a=>({...a,key:a.id,host:'local'})));previousRoster=revision;}
+    agentScene.sync(agents, scene);
   }
   function setActive(active){if(active===enabled)return;enabled=active;keys={};sim.path=[];lastPose=null;if(!active){sent.clear();sim.cancelAdventure();sim.stopDance();sim.targetKey=null;sim.arrived=null;profile.save();}}
   function reset(){
-    setActive(false);profile.close();self=null;peers.clear();sent.clear();seq=0;hover=null;previousRoster='';sim.sync([]);focus={x:-1.6,z:-1.7};yaw=.24;pitch=.76;zoom=1.2;
+    setActive(false);profile.close();self=null;peers.clear();sent.clear();seq=0;hover=null;agentScene.sync([],[]);focus={x:-1.6,z:-1.7};yaw=.24;pitch=.76;zoom=1.2;
   }
   function animate(now){
     if(!alive)return;const dt=Math.min(.08,(now-lastFrame)/1000||0);lastFrame=now;
     if(enabled){
       yaw+=((keys.d?1:0)-(keys.a?1:0))*dt*1.6;pitch=clampPitch(pitch+((keys.w?1:0)-(keys.s?1:0))*dt);
       sim.step(dt,keys,yaw);
+      agentScene.draw();
       profile.save();
       if(sim.arrived){
         const agent=sim.npcs.get(sim.arrived);sim.arrived=null;
@@ -238,8 +240,8 @@ export function createGuildWorld({canvas,labels,onMove,onInspect=()=>{},onAgent,
       const activity=['wood','attack','dance'].includes(p.activity)?p.activity:'idle';
       const gear=Object.values(p.loadout||{}).join('/');
       const recover=a.message==='You recover at the commons.'&&p.x===0&&p.z===12;
-      if(now-lastSend>=95&&(!lastPose||Math.hypot(p.x-lastPose.x,p.z-lastPose.z)>.005||Math.abs(p.yaw-lastPose.yaw)>.02||lastPose.activity!==activity||lastGear!==gear)){
-        const packet={x:p.x,z:p.z,yaw:p.yaw,activity,seq:++seq};
+      if(now-lastSend>=95&&(!lastPose||Math.hypot(p.x-lastPose.x,p.z-lastPose.z)>.005||Math.abs(p.yaw-lastPose.yaw)>.02||lastPose.activity!==activity||lastPose.moving!==!!p.moving||lastGear!==gear)){
+        const packet={x:p.x,z:p.z,yaw:p.yaw,activity,moving:!!p.moving,seq:++seq};
         if(gear!==lastGear){packet.loadout=p.loadout;lastGear=gear;}
         if(recover)packet.recover=true;
         lastPose={...packet};sent.set(seq,{x:p.x,z:p.z});
