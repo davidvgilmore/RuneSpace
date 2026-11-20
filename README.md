@@ -17,7 +17,14 @@ https://github.com/user-attachments/assets/b9d74557-109c-4cc7-8af1-ad63f4224a7f
 
 ## Install on macOS
 
-You'll need a Metal-capable Mac, a working Herdr Desktop and Core installation, Node.js 22 or later, Python 3, and the Xcode Command Line Tools for Swift. Tested with Herdr Desktop 0.1.16 and Core 0.1.21. [Herdr Desktop](https://github.com/herdrdev/herdr-app) · [Herdr Core](https://github.com/herdrdev/herdr-core)
+On an Apple Silicon Mac, install Herdr and open it once. The official installer also installs Herdr Core if needed. [Herdr installation guide](https://github.com/herdrdev/herdr-app#install)
+
+```sh
+curl -fsSL https://releases.herdr.dev/app/install.sh | sh
+open "$HOME/Applications/Herdr.app"
+```
+
+RuneSpace needs Metal, Node.js 22 or later, Python 3, and the Xcode Command Line Tools for Swift. If the command line tools are missing, run `xcode-select --install` and let the installation finish. Then install the mod. [Node.js downloads](https://nodejs.org/en/download)
 
 ```sh
 git clone https://github.com/davidvgilmore/RuneSpace.git
@@ -35,7 +42,9 @@ The installer builds the world and places the mod, theme and layout in your Herd
 
 ## Bring teammates into Guild world
 
-Open **Guild world → Call → Copy guest invite** on the host. Teammates with RuneSpace installed can copy the link, open **Call** in their own Herdr, enter a display name, choose **Bring my agents**, and click **Join with copied invite**. Everyone meets on the same map. Teammates can also open the link in a browser to visit.
+Open **Guild world → Call → Copy guest invite** on the host. If your guild uses a shared Tailscale VM, give teammates both the VM share link and the RuneSpace guild invite. Each teammate connects Tailscale on their Mac to their own tailnet and accepts the VM share once. [Tailscale machine sharing](https://tailscale.com/docs/features/sharing)
+
+To bring agents, start them in terminals in your own Herdr (for example, `codex` or `claude`). Copy the **RuneSpace guild invite**, open **RuneSpace → Guild world → Call**, enter your display name, select **Bring my agents**, and click **Join with copied invite**. Everyone meets on the same map. You can also open the guild invite in a browser to visit without bringing agents.
 
 Shared agents wear their harness outfits and show who brought them. Working agents take available jobs around town and idle agents gather at the commons. Each teammate can change agent sharing in **Call** during a visit. If they already host a guild, they can leave their call, choose **Visit another guild**, and use **Return to my guild** afterward. Only the person running an agent can open its private Herdr conversation. Nearby voice and video stay connected through chats and inventory. Microphone and camera start off.
 
