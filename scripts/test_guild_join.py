@@ -45,6 +45,16 @@ class GuildInviteTests(unittest.TestCase):
         self.assertEqual(self.config.read_text(), original)
         self.assertEqual(social.invite(self.home), LINK)
 
+    def test_guest_gateway_copy_preserves_owner_endpoint_and_excludes_its_capability(self):
+        gateway = LINK.replace('guild.example', 'gateway.example')
+        self.config.write_text(json.dumps({'url': LINK+'&owner='+OWNER, 'guestUrl': gateway+'&owner='+OWNER}))
+        self.assertEqual(social.invite(self.home), LINK)
+        self.assertEqual(social.invite(self.home, for_copy=True), gateway)
+        self.config.write_text(json.dumps({'url': LINK+'&owner='+OWNER, 'guestUrl': gateway+'-previous'}))
+        with self.assertRaisesRegex(ValueError, 'current guild'):
+            social.invite(self.home, for_copy=True)
+        self.assertEqual(social.invite(self.home), LINK)
+
     def test_explicit_visit_preserves_the_home_guild_and_uses_its_latest_configuration_on_return(self):
         base={'url':LINK+'&owner='+OWNER,'name':'Host','other':'keep'}
         self.config.write_text(json.dumps(base))

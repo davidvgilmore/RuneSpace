@@ -61,7 +61,7 @@ export function settings(env = process.env) {
   if (rawMedia.some(Boolean) && !rawMedia.every(Boolean)) throw new Error('Set LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET together.');
   return {
     host: env.RUNESPACE_HOST || '127.0.0.1', port: Number(env.RUNESPACE_PORT ?? 8787),
-    origin: env.RUNESPACE_ORIGIN, invite: env.RUNESPACE_INVITE, agentRoster: env.RUNESPACE_AGENT_ROSTER,
+    origin: env.RUNESPACE_ORIGIN, guestOrigin: env.RUNESPACE_GUEST_ORIGIN, invite: env.RUNESPACE_INVITE, agentRoster: env.RUNESPACE_AGENT_ROSTER,
     desktop: env.RUNESPACE_OWNER_TOKEN || env.RUNESPACE_HERDR_CLI || env.RUNESPACE_HERDR_MOD
       ? {token: env.RUNESPACE_OWNER_TOKEN, cli: env.RUNESPACE_HERDR_CLI, mod: env.RUNESPACE_HERDR_MOD} : null,
     livekit: rawMedia.every(Boolean) ? { url: rawMedia[0], apiKey: rawMedia[1], apiSecret: rawMedia[2] } : null
@@ -75,18 +75,23 @@ export function createRoomServer(options = {}) {
   if (invite.length < 16 || invite.length > 512) throw new Error('Use an invitation of 16–512 characters.');
   const inviteHash = digest(invite);
   const desktop = createHostActions(options.desktop, invite, agentRoster);
-  let configuredOrigin;
-  if (options.origin) {
-    const url = new URL(options.origin);
-    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.href !== url.origin + '/') throw new Error('RUNESPACE_ORIGIN must be a full HTTP(S) origin without a path.');
-    configuredOrigin = url.origin;
-  } else if (!['127.0.0.1', '::1', 'localhost'].includes(host)) {
-    throw new Error('Set RUNESPACE_ORIGIN when listening beyond localhost.');
+  function parseOrigin(value, setting) {
+    if (!value) return null;
+    const url = new URL(value);
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.href !== url.origin + '/')
+      throw new Error(setting + ' must be a full HTTP(S) origin without a path.');
+    return url.origin;
   }
+  const configuredOrigin = parseOrigin(options.origin, 'RUNESPACE_ORIGIN');
+  const guestOrigin = parseOrigin(options.guestOrigin, 'RUNESPACE_GUEST_ORIGIN');
+  if (guestOrigin && (!configuredOrigin || !guestOrigin.startsWith('https:') || configuredOrigin === guestOrigin))
+    throw new Error('Set a distinct HTTPS guest gateway and an explicit RUNESPACE_ORIGIN for the desktop.');
+  if (!configuredOrigin && !['127.0.0.1', '::1', 'localhost'].includes(host))
+    throw new Error('Set RUNESPACE_ORIGIN when listening beyond localhost.');
   if (livekit) {
     const u = new URL(livekit.url);
     if (!['ws:', 'wss:'].includes(u.protocol) || u.username || u.password || u.hash || u.search) throw new Error('LIVEKIT_URL must be a WebSocket endpoint.');
-    if (configuredOrigin?.startsWith('https:') && u.protocol !== 'wss:') throw new Error('Use a wss:// LiveKit endpoint with an HTTPS team room.');
+    if ((guestOrigin || configuredOrigin?.startsWith('https:')) && u.protocol !== 'wss:') throw new Error('Use a wss:// LiveKit endpoint with an HTTPS team room.');
   }
   // A room name belongs to one running authority, so restarting cannot reconnect old media clients to a new guild.
   const roomName = 'runespace-' + randomUUID();
@@ -99,7 +104,8 @@ export function createRoomServer(options = {}) {
   server.requestTimeout = 10_000;
   let origin, broadcastTimer, maintenance, refreshTimer, readingRoster = false, stopping = false;
   let agentViews = {guests: [], owner: [], bindings: {}};
-  const allowedOrigin = value => configuredOrigin ? value === configuredOrigin : [
+  const trustedOrigins = new Set([configuredOrigin, guestOrigin].filter(Boolean));
+  const allowedOrigin = value => trustedOrigins.size ? trustedOrigins.has(value) : [
     'http://127.0.0.1:', 'http://localhost:', 'http://[::1]:'
   ].some(base => value === base + server.address()?.port);
 
@@ -324,7 +330,7 @@ export function createRoomServer(options = {}) {
         }
         const token = secret();
         const peer = spawn(name.trim());
-        const isOwner = desktop?.authenticates(owner) === true;
+        const isOwner = (!guestOrigin || req.headers.origin === configuredOrigin) && desktop?.authenticates(owner) === true;
         const nativeHost = isOwner && client === 'herdr';
         if (client === 'herdr' && position && [position.x,position.z,position.yaw].every(Number.isFinite) && !sim.blocked(position.x,position.z)) {
           Object.assign(peer, {x:position.x, z:position.z, yaw:normalizeAngle(position.yaw)});
@@ -335,7 +341,7 @@ export function createRoomServer(options = {}) {
           'guest/' + (validMemberId(contributorKey) ? contributorKey : peer.id)).digest('hex') : null;
         const sharing = shareAgents === true || (hostDesktop && shareAgents !== false);
         sessions.set(token, { peer, isOwner, nativeHost, native, hostDesktop, namespace, sharing, order:++nextSessionOrder, needsNativeSpawn, socket: null, expires: Date.now()+resumeMs, budget: 1, lastMove: performance.now() });
-        return reply(res, 201, { id: peer.id, session: token, media: Boolean(livekit), canOpenChats: isOwner && Boolean(agentRoster), canOpenWorld: isOwner });
+        return reply(res, 201, { id: peer.id, session: token, media: Boolean(livekit), ...(guestOrigin && {guestOrigin}), canOpenChats: isOwner && Boolean(agentRoster), canOpenWorld: isOwner });
       }
       const auth = req.headers.authorization;
       const token = auth?.startsWith('Bearer ') ? auth.slice(7) : '';
@@ -434,7 +440,7 @@ export function createRoomServer(options = {}) {
       }, 10_000);
       await refreshAgents();
       if (agentRoster) refreshTimer = setInterval(refreshAgents, 5000);
-      return { origin, inviteLink: origin + '/#invite=' + encodeURIComponent(invite) };
+      return { origin, inviteLink: (guestOrigin || origin) + '/#invite=' + encodeURIComponent(invite) };
     },
     async close() {
       stopping = true;

@@ -143,6 +143,44 @@ test('partial media configuration and unspecified remote origins fail visibly', 
   assert.throws(() => createRoomServer({ origin:'https://room.test', livekit:{url:'ws://media.test'} }), /wss:/);
 });
 
+test('the shared gateway joins the same room as the desktop and issues guest-only invitations', async t => {
+  const origin = 'https://desktop.test:8465';
+  const guestOrigin = 'https://gateway.test:8465';
+  const token = randomBytes(32).toString('hex');
+  const options = settings({RUNESPACE_ORIGIN:origin, RUNESPACE_GUEST_ORIGIN:guestOrigin});
+  const room = createRoomServer({...options, port:0, invite:invitation, desktop:{token,cli:'/test/herdr',mod:'runespace'}});
+  const ready = await room.listen();
+  t.after(() => room.close());
+  assert.equal(ready.origin, origin);
+  assert.equal(ready.inviteLink, guestOrigin + '/#invite=' + invitation);
+  const port = room.server.address().port;
+  const join = requestOrigin => fetch('http://127.0.0.1:' + port + '/api/join', {
+    method:'POST', headers:{Origin:requestOrigin,'Content-Type':'application/json'},
+    body:JSON.stringify({invite:invitation, owner:token, client:'herdr', name:'Player'})
+  });
+  for (const address of [origin, guestOrigin]) {
+    const response = await join(address);
+    assert.equal(response.status, 201);
+    const session = await response.json();
+    assert.equal(session.guestOrigin, guestOrigin);
+    assert.equal(session.canOpenWorld, address === origin);
+    const ws = new WebSocket('ws://127.0.0.1:' + port + '/presence', {origin:address});
+    await once(ws, 'open');
+    ws.send(JSON.stringify({type:'hello', session:session.session}));
+    const [packet] = await once(ws, 'message');
+    assert.equal(JSON.parse(packet).self, session.id);
+    ws.close();
+  }
+  assert.equal((await join(guestOrigin + '.evil.test')).status, 403);
+  for (const bad of ['https://wrong.test', undefined]) {
+    const ws = new WebSocket('ws://127.0.0.1:' + port + '/presence', {origin:bad});
+    assert.match((await once(ws, 'error'))[0].message, /403/);
+  }
+  for (const bad of ['https://gateway.test/path','http://gateway.test',origin]) {
+    assert.throws(() => createRoomServer({origin,guestOrigin:bad}));
+  }
+});
+
 test('only the owner opens a current desktop target and receives its private display title', async t => {
   const {mkdtemp, rm, writeFile} = await import('node:fs/promises');
   const {tmpdir} = await import('node:os');

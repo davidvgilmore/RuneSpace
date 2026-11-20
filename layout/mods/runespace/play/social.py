@@ -64,9 +64,17 @@ def owner_config(config):
     return bool(parse_qs(urlsplit(config.get('url', '')).fragment).get('owner'))
 
 
-def invite(home):
+def invite(home, for_copy=False):
     config = load_config(config_file(home))
-    return guest_url(config.get('url')) if config else None
+    if not config:
+        return None
+    url = guest_url(config.get('url'))
+    if for_copy and owner_config(config) and config.get('guestUrl'):
+        shared = guest_url(config['guestUrl'])
+        if urlsplit(shared).fragment != urlsplit(url).fragment:
+            raise ValueError('The guest gateway link must use the current guild invitation.')
+        return shared
+    return url
 
 
 def configure_guest(home, text, name, share_agents, visit=False):
@@ -203,7 +211,7 @@ def main():
             if running(folder):
                 atomic(commands / (str(time.time_ns()) + '.json'), json.dumps({'kind': kind}).encode())
             return {'ok': True, 'shareAgents': kind == 'share-on'}
-        url = invite(home) if kind in ('invite', 'start', 'status') else None
+        url = invite(home, for_copy=kind == 'invite') if kind in ('invite', 'start', 'status') else None
         active = running(folder)
         if kind == 'status':
             state = read_json(folder / 'state.json') if active else {'connected': False, 'status': 'stopped'}

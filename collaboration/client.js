@@ -166,7 +166,7 @@ $('roster-toggle').addEventListener('click',()=>{
   const shown=$('roster').classList.toggle('expanded');$('roster-toggle').setAttribute('aria-expanded',String(shown));
 });
 $('invite').addEventListener('click',()=>{
-  $('invite-link').value=teamInvite(new URL(location.href),invite);$('invite-dialog').showModal();$('invite-link').select();
+  $('invite-link').value=teamInvite(new URL(credentials?.guestOrigin || location.href),invite);$('invite-dialog').showModal();$('invite-link').select();
 });
 $('copy-link').addEventListener('click',async()=>{
   try{await navigator.clipboard.writeText($('invite-link').value);$('invite-dialog').close();toast('Guild invite copied.');}
